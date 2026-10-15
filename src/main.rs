@@ -1,4 +1,5 @@
 mod app;
+mod dialogs;
 mod graphics;
 mod renderer;
 mod subtitles;
@@ -29,20 +30,21 @@ fn usage(){
 Usage: termvlc [OPTIONS] [VIDEO|DIRECTORY|URL]\n\n\
 Options:\n\
   --graphics auto|kitty|sixel|iterm2|ansi     Auto detect (default)\n\
-  --fps N                                  Encoding budget, 1-60 (default 24)\n\
+  --fps N                                  Encoding budget, 1-120 (default 60)\n\
   --subtitle <path>                        External .srt/.vtt/.ass subtitles\n\
   --native-window                          Separate GPU-accelerated VLC video window\n\
   --doctor                                 Print LibVLC diagnostic information\n\
   -h, --help                               Show help\n\n\
 Controls: F/F11 fullscreen; Esc or Back button return; Space pause; ←/→ seek;\n\
 S choose subtitles; L load external captions; A audio tracks; +/- volume;\n\
-[ and ] speed; O open media/URL; N/P next/previous; G graphics fallback;\n\
+[ and ] speed; O / Ctrl+O open file; N/P next/previous; G graphics fallback;\n\
 ? help, I media information, Q quit.\n\n\
+Drag and drop any video, folder or subtitle file into the terminal.\n\
 Requires a compatible LibVLC 3.x shared library.\n");
 }
 fn options()->Result<Options>{
     let mut out=Options {media:None,subtitle:None,graphics:GraphicsChoice::Auto,
-        fps:30,native_window:false,doctor:false};
+        fps:60,native_window:false,doctor:false};
     let mut args=std::env::args().skip(1);
     while let Some(arg)=args.next(){
         match arg.as_str(){
@@ -60,7 +62,7 @@ fn options()->Result<Options>{
             _=>bail!("Only one media/directory/URL may be specified"),
         }
     }
-    if !(1..=60).contains(&out.fps){bail!("--fps must be between 1 and 60");}
+    if !(1..=120).contains(&out.fps){bail!("--fps must be between 1 and 120");}
     Ok(out)
 }
 
@@ -149,7 +151,7 @@ fn run() -> Result<()> {
                         graphics.invalidate();
                     } else if !app.handle_key(key,&mut player)? {break;}
                 }
-                Event::Paste(s)=>app.paste(&s),
+                Event::Paste(s)=>{ let _ = app.handle_drop_or_paste(&s, &mut player); }
                 Event::Mouse(m)=>app.handle_mouse(m,&zones,&mut player)?,
                 Event::Resize(_,_)=>{terminal.clear()?;graphics.invalidate();}
                 _=>{}

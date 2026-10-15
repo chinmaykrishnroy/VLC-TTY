@@ -43,10 +43,10 @@ unsafe extern "C" fn configure_video(opaque: *mut *mut c_void, chroma: *mut c_ch
     let ctx = &*(*opaque as *const CallbackContext);
     let in_w = (*width).max(1) as f64;
     let in_h = (*height).max(1) as f64;
-    // Decode at 1080p or the original source size, whichever is smaller.
-    // Allow TERMVLC_DECODE_MAX=0 to request native dimensions (e.g. 4K, uncapped).
+    // Decode at the original native media resolution decided directly by the media file.
+    // Allow TERMVLC_DECODE_MAX to optionally cap (e.g. 1080) if explicitly requested.
     let requested_max = env::var("TERMVLC_DECODE_MAX").ok()
-        .and_then(|s| s.parse::<u32>().ok()).unwrap_or(1080);
+        .and_then(|s| s.parse::<u32>().ok()).unwrap_or(0); // 0 = uncapped native media dimensions
     let scale = if requested_max == 0 { 1.0 } else {
         (requested_max as f64 * (16.0 / 9.0) / in_w)
             .min(requested_max as f64 / in_h).min(1.0)

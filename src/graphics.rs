@@ -107,7 +107,7 @@ impl GraphicsRenderer {
             protocol_kind, detected, request_tx, responses,
             current: None, current_serial: 0, area: Size::default(),
             busy: false, last_request_at: Instant::now() - Duration::from_secs(1),
-            frame_interval: Duration::from_millis(1000 / max_fps.clamp(1, 60) as u64),
+            frame_interval: Duration::from_millis(1000 / max_fps.clamp(1, 120) as u64),
             ansi_override, error_note: None,
         }
     }
@@ -180,11 +180,13 @@ impl GraphicsRenderer {
         }
         if let Some(ref protocol) = self.current {
             let size = protocol.size();
-            if size.width <= area.width && size.height <= area.height {
+            let w = size.width.min(area.width);
+            let h = size.height.min(area.height);
+            if w > 0 && h > 0 {
                 let centered = Rect::new(
-                    area.x + (area.width - size.width) / 2,
-                    area.y + (area.height - size.height) / 2,
-                    size.width, size.height,
+                    area.x + (area.width.saturating_sub(w)) / 2,
+                    area.y + (area.height.saturating_sub(h)) / 2,
+                    w, h,
                 );
                 f.render_widget(Image::new(protocol), centered);
             }
@@ -207,8 +209,10 @@ fn encode_sixel_fast(
     if frame.width == 0 || frame.height == 0 || area.width == 0 || area.height == 0 {
         return Err("empty frame or area".to_string());
     }
-    let max_w = (area.width as f64 * font.width as f64).max(1.0);
-    let max_h = (area.height as f64 * font.height as f64).max(1.0);
+    let font_w = if font.width == 0 { 9.0 } else { font.width as f64 };
+    let font_h = if font.height == 0 { 18.0 } else { font.height as f64 };
+    let max_w = (area.width as f64 * font_w).max(1.0);
+    let max_h = (area.height as f64 * font_h).max(1.0);
 
     let wratio = max_w / frame.width as f64;
     let hratio = max_h / frame.height as f64;
@@ -216,8 +220,8 @@ fn encode_sixel_fast(
     let target_w = ((frame.width as f64 * ratio).round() as usize).max(1);
     let target_h = ((frame.height as f64 * ratio).round() as usize).max(1);
 
-    let cell_w = (target_w as f32 / font.width as f32).ceil() as u16;
-    let cell_h = (target_h as f32 / font.height as f32).ceil() as u16;
+    let cell_w = ((target_w as f64 / font_w).ceil() as u16).min(area.width);
+    let cell_h = ((target_h as f64 / font_h).ceil() as u16).min(area.height);
 
     let mut rgba = vec![0u8; target_w * target_h * 4];
     let fw = frame.width;
@@ -340,5 +344,21 @@ mod tests {
         } else {
             panic!("expected Sixel protocol");
         }
+    }
+    #[test]
+    fn fullscreen_sixel_dimensions() {
+        let frame = VideoFrame {
+            width: 1920, height: 1080, pitch: 1920 * 4,
+            bgra: vec![128; 1920 * 1080 * 4], serial: 1,
+        };
+        // Simulated fullscreen: 180 cols x 45 rows, font 9x18
+        let area = Size::new(180, 45);
+        let font = FontSize::new(9, 18);
+        let res = encode_sixel_fast(&frame, area, font, false);
+        assert!(res.is_ok(), "encode failed: {:?}", res.err());
+        let proto = res.unwrap();
+        let size = proto.size();
+        assert!(size.width <= area.width, "width {} > area {}", size.width, area.width);
+        assert!(size.height <= area.height, "height {} > area {}", size.height, area.height);
     }
 }
