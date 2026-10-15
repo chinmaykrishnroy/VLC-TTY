@@ -129,10 +129,12 @@ struct Api {
     audio_get_volume: unsafe extern "C" fn(*mut c_void) -> c_int,
     audio_set_volume: unsafe extern "C" fn(*mut c_void, c_int) -> c_int,
     player_set_rate: unsafe extern "C" fn(*mut c_void, f32) -> c_int,
+    #[allow(dead_code)]
     video_get_spu: unsafe extern "C" fn(*mut c_void) -> c_int,
     video_set_spu: unsafe extern "C" fn(*mut c_void, c_int) -> c_int,
     video_get_spu_description: unsafe extern "C" fn(*mut c_void) -> *mut TrackDescription,
     video_set_subtitle_file: unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int,
+    #[allow(dead_code)]
     audio_get_track: unsafe extern "C" fn(*mut c_void) -> c_int,
     audio_set_track: unsafe extern "C" fn(*mut c_void, c_int) -> c_int,
     audio_get_track_description: unsafe extern "C" fn(*mut c_void) -> *mut TrackDescription,
@@ -286,7 +288,9 @@ fn plugin_candidates(library: &Path) -> Vec<PathBuf> {
 #[derive(Clone, Debug)]
 pub struct PlaybackSnapshot {
     pub time_ms: i64, pub length_ms: i64, pub volume: i32,
-    pub state: i32, pub rate: f32, pub frames: u64,
+    pub state: i32, pub rate: f32,
+    #[allow(dead_code)]
+    pub frames: u64,
 }
 
 pub struct VlcPlayer {
@@ -296,6 +300,20 @@ pub struct VlcPlayer {
     context: Box<CallbackContext>,
     rate: f32,
     native_window: bool,
+}
+
+fn clean_path_for_vlc(path: &Path) -> Result<String> {
+    if !path.exists() {
+        bail!("file not found: {}", path.display());
+    }
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut s = canonical.to_string_lossy().into_owned();
+    if s.starts_with(r"\\?\UNC\") {
+        s = format!(r"\\{}", &s[8..]);
+    } else if s.starts_with(r"\\?\") {
+        s = s[4..].to_string();
+    }
+    Ok(s)
 }
 
 impl VlcPlayer {
@@ -335,7 +353,11 @@ impl VlcPlayer {
 
     pub fn open(&mut self, locator: &str) -> Result<()> {
         let is_url = locator.contains("://");
-        let text = if is_url { locator.to_owned() } else { Path::new(locator).canonicalize().with_context(|| format!("file not found: {locator}"))?.to_string_lossy().into_owned() };
+        let text = if is_url {
+            locator.to_owned()
+        } else {
+            clean_path_for_vlc(Path::new(locator))?
+        };
         let c = CString::new(text.clone()).map_err(|_| anyhow!("path contains a NUL byte"))?;
         unsafe {
             (self.api.player_stop)(self.player);
@@ -392,6 +414,7 @@ impl VlcPlayer {
     pub fn subtitle_tracks(&self) -> Vec<MediaTrack> {
         unsafe { self.track_descriptions(self.api.video_get_spu_description) }
     }
+    #[allow(dead_code)]
     pub fn current_subtitle_id(&self) -> i32 {
         unsafe { (self.api.video_get_spu)(self.player) }
     }
@@ -401,6 +424,7 @@ impl VlcPlayer {
     pub fn audio_tracks(&self) -> Vec<MediaTrack> {
         unsafe { self.track_descriptions(self.api.audio_get_track_description) }
     }
+    #[allow(dead_code)]
     pub fn current_audio_id(&self) -> i32 {
         unsafe { (self.api.audio_get_track)(self.player) }
     }
@@ -408,8 +432,8 @@ impl VlcPlayer {
         unsafe { (self.api.audio_set_track)(self.player, id) == 0 }
     }
     pub fn load_vlc_subtitle(&mut self, path: &Path) -> Result<()> {
-        let absolute = path.canonicalize().with_context(|| format!("Subtitle not found: {}", path.display()))?;
-        let c = CString::new(absolute.to_string_lossy().as_bytes())?;
+        let text = clean_path_for_vlc(path)?;
+        let c = CString::new(text.as_bytes())?;
         if unsafe { (self.api.video_set_subtitle_file)(self.player, c.as_ptr()) } == 0 {
             bail!("VLC could not load this subtitle (or media isn't ready yet): {}", path.display());
         }
@@ -480,5 +504,21 @@ mod tests {
         assert_eq!(frame.serial, 1);
         assert_eq!(frame.width, w as usize);
         assert_eq!(frame.bgra[0], 42);
+    }
+    #[test]
+    fn test_open_video_playback() {
+        let mut player = match VlcPlayer::new() {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let file = r"E:\data\Media\TV\Breaking Bad\Season 02\Breaking Bad - S02E03.mkv";
+        if std::path::Path::new(file).exists() {
+            let res = player.open(file);
+            assert!(res.is_ok(), "Failed to open video: {:?}", res);
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let snap = player.snapshot();
+            // State 3 is Playing, State 1/2 is Opening/Buffering
+            assert!(snap.state == 3 || snap.state == 1 || snap.state == 2, "Expected playing state, got {}", snap.state);
+        }
     }
 }
