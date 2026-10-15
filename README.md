@@ -1,147 +1,117 @@
-# TermVLC — LibVLC-powered terminal video player (MVP v0.1.0)
+# TermVLC v0.2.0 — Rust / Ratatui / LibVLC TUI
 
-A **standalone** terminal video player. Actual media playback, audio/video synchronization, seeking, audio tracks and subtitles are provided by **LibVLC 3.x**; the terminal UI and video display are implemented in standard-library Python using the documented LibVLC C callbacks. Frames render directly in the terminal with 24-bit ANSI colors and Unicode half-blocks (not a separate GUI VLC window).
+A terminal media player prototype: **Rust**, **Ratatui**, **Crossterm**, and **LibVLC 3.x**, with native audio and inline true-color terminal video. This is a new Rust implementation, not a merge of VLC or SparkPlayer source code.
 
-> **Scope:** This is a runnable *proof-of-concept*, not full VLC feature parity. Its frame renderer is half-block TrueColor, rather than Kitty/Sixel high-resolution graphics. Performance depends heavily on terminal speed. It is an independent learning project; not affiliated with VideoLAN or SparkPlayer. No VLC or SparkPlayer source code is bundled.
+> **Validation status:** The code is provided as a development prototype. The packaging environment did **not** contain Cargo/rustc, LibVLC, or working Git network access, so **it was not compiled or playback-tested here**. Static/source validation and the supplied sample video's integrity can be checked, but successful compilation/playback on your machine is not yet verified. Report any compile error and I can revise the source.
 
-## Prerequisites
+## Required software
 
-* **Python 3.9+**, 64-bit if VLC is 64-bit. No third-party Python packages are required to run from source.
-* **VLC 3.x / LibVLC 3.x** installed and accessible. Python's architecture must match VLC's architecture.
-* An interactive terminal with UTF-8, VT/ANSI and preferably 24-bit RGB support. Windows Terminal, WezTerm, Kitty, Ghostty, and most modern Linux/macOS terminals work for this ANSI rendering mode.
-* For a Windows desktop, use **Windows Terminal or WezTerm** with a reasonably large terminal window (at least 90x30 is recommended).
+- Rust stable and Cargo, from https://rustup.rs/
+- LibVLC **3.x** and compatible VLC plugins (64-bit). VLC 4 APIs are different; this adapter targets 3.x.
+- A terminal supporting 24-bit color: Windows Terminal, WezTerm, Kitty, GNOME Terminal, etc.
 
-### Windows 10/11 (PowerShell in Windows Terminal)
+### Windows 10/11 (PowerShell)
 
-1. Install **64-bit VLC 3.x** from [VideoLAN](https://www.videolan.org/vlc/download-windows.html). Also install Python 3.9+ if you don't already have it.
-2. Extract this ZIP to any folder, then in a PowerShell tab:
-
-```powershell
-cd "C:\path\to\termvlc_project"
-py -m termvlc --doctor
-py -m termvlc ".\samples\sample.mp4"
-```
-
-To play your own video:
+1. Install stable Rust + Cargo via https://rustup.rs/ and restart PowerShell.
+2. Install 64-bit VLC **3.x** via https://www.videolan.org/vlc/ (the executable alone is not sufficient; the directory must include `libvlc.dll`, `libvlccore.dll`, and `plugins`).
+3. Unzip the project. In the extracted directory:
 
 ```powershell
-py -m termvlc "D:\Media\Video\Movies\YourMovie.mkv" --fps 15
+cd .\termvlc_rust_v0.2.0
+$env:VLC_HOME = "C:\Program Files\VideoLAN\VLC"
+cargo build --release
+cargo run --release -- --doctor
+cargo run --release -- .\samples\sample.mp4
+# Your own video:
+cargo run --release -- "D:\Media\Video\Movies\example.mkv"
+# Browse a folder:
+cargo run --release -- "D:\Media\Video\Movies"
+# Stream URL:
+cargo run --release -- "https://example.com/video.mp4"
 ```
 
-To browse a folder:
+If the Windows DLL loader reports it cannot find `libvlccore.dll`, add the installation directory to your current PowerShell session:
 
 ```powershell
-py -m termvlc "D:\Media\Video\Movies"
+$env:PATH = "$env:VLC_HOME;$env:PATH"
 ```
 
-If VLC was installed in a nonstandard directory, point the app to its DLL:
-
-```powershell
-$env:TERMVLC_LIBVLC_PATH = "C:\Program Files\VideoLAN\VLC\libvlc.dll"
-py -m termvlc --doctor
-```
-
-To use the command `termvlc` globally, run `py -m pip install -e .` from the project directory. Then `termvlc "path\to\movie.mp4"` should work in that Python environment. This optional install may require setuptools/internet; direct `py -m termvlc` works without installation.
-
-### Ubuntu/Debian Linux
+### Ubuntu/Debian
 
 ```bash
 sudo apt update
-sudo apt install -y python3 libvlc5 vlc
-cd /path/to/termvlc_project
-python3 -m termvlc --doctor
-python3 -m termvlc samples/sample.mp4
-python3 -m termvlc "$HOME/Videos/movie.mkv"
+sudo apt install -y vlc libvlc5 libvlc-bin libvlc-dev pkg-config
+# Install Rust from https://rustup.rs if 'cargo' is not already installed.
+cargo build --release
+cargo run --release -- --doctor
+cargo run --release -- ./samples/sample.mp4
+cargo run --release -- "$HOME/Videos/example.mkv"
 ```
-
-If installed from system packages but `--doctor` reports missing LibVLC, inspect your distro's LibVLC library path with `ldconfig -p | grep libvlc`.
 
 ### macOS
 
-Install VLC 3.x using the official [VLC macOS distribution](https://www.videolan.org/vlc/download-macosx.html); then:
+Install Rust from https://rustup.rs and VLC 3.x from VideoLAN. The loader looks for `/Applications/VLC.app/Contents/MacOS/lib/libvlc.dylib`. Packaging and native playback on macOS have not been verified.
 
-```bash
-cd /path/to/termvlc_project
-python3 -m termvlc --doctor
-python3 -m termvlc samples/sample.mp4
-```
-
-If loading fails, use `TERMVLC_LIBVLC_PATH=/Applications/VLC.app/Contents/MacOS/lib/libvlc.dylib` with `python3 -m termvlc --doctor`. Be sure the LibVLC binary and your Python interpreter have matching architectures.
-
-## Playing videos
-
-```bash
-python3 -m termvlc samples/sample.mp4
-python3 -m termvlc /home/you/Videos/movie.mkv --fps 15
-python3 -m termvlc /home/you/Videos
-python3 -m termvlc 'https://example.org/movie.mp4'
-python3 -m termvlc 'rtsp://example.org/live'
-python3 -m termvlc /home/you/Videos/movie.mkv --ascii
-python3 -m termvlc /home/you/Videos/movie.mkv --decode-width 320 --fps 18
-```
-
-Use `py -m termvlc` on Windows. A high `--decode-width` increases VLC's CPU scaling load; high `--fps` increases terminal I/O bandwidth. Default is 224-pixel-wide decoded frames and 12 terminal refreshes per second.
-
-### Controls
+## Controls
 
 | Key | Action |
-|---|---|
-| `Space` | Pause/resume |
-| `Left` / `Right` | Seek -5/+5 seconds |
-| `+` / `-` | Volume up/down |
-| `m` | Mute |
-| `[` / `]` | Playback speed -/+0.25x |
-| `s` | Cycle subtitle track, including off |
-| `a` | Cycle audio track |
-| `f` | Focus/fullscreen video within the terminal (hides library pane) |
-| `Up` / `Down` | Navigate the library |
-| `Enter` | Open directory / play selected file |
-| `n` / `p` | Next/previous media file in current directory |
-| `q` | Quit safely |
+| --- | --- |
+| Space | Pause/resume |
+| Left/Right (or h/l) | Seek -/+ 10 seconds |
+| s | Cycle subtitle tracks (including off) |
+| a | Cycle audio tracks |
+| n / p | Next / previous video in directory |
+| Up/Down or j/k | Select file/directory |
+| Enter | Open selected video or directory |
+| Backspace | Parent directory |
+| + / - | Volume |
+| M | Mute/unmute |
+| F | Focus video / hide library browser |
+| [ / ] | Lower/higher playback speed |
+| R | Reload directory |
+| Q/Esc | Quit |
 
-## Architecture
-
-```text
-termvlc/__main__.py   ── CLI / diagnostics
-termvlc/app.py        ── file browser + keyboard controls + main loop
-termvlc/terminal.py   ── cross-platform raw terminal session and input
-termvlc/render.py     ── TrueColor ANSI half-block image compositor
-termvlc/engine.py     ── ctypes bindings to LibVLC 3.x
-                            │
-                      libvlc.dll / libvlc.so.5 / libvlc.dylib
-                            │
-                 demux + decode + audio + A/V master clock
-                            │
-       libvlc_video_{format,lock,display}_cb
-                            │
-                   newest complete RV32 frame
-                            │
-                    ANSI half-block renderer
-```
-
-**Important:** Video data is delivered using `libvlc_video_set_callbacks()` and `libvlc_video_set_format_callbacks()`. VLC owns the audio output and media clock. Video pictures are **not** displayed from LibVLC's callback thread; the TUI loop draws only the most recently delivered frame and drops older pictures. Pixel buffers are 32-byte aligned and decode-scale to keep terminal rendering manageable.
-
-The terminal's renderer has limited effective pixel resolution: one upper-half Unicode block can encode two color samples. This can look colorful and animated, but will not be as sharp as VLC in a GUI window. Native audio continues independently of terminal frame rate.
-
-## Tests (developer)
+## CLI Options
 
 ```bash
-python3 -m unittest discover -s tests -v
+cargo run --release -- [OPTIONS] [FILE|DIRECTORY|URL]
+
+Options:
+  --fps <N>           Terminal refresh limit (1 to 60, default 15)
+  --decode-width <N>  LibVLC video callback width (64 to 1920, default 480)
+  --ascii             Render in monochrome ASCII mode
+  --doctor            Check LibVLC runtime availability
+  -h, --help          Show help message
 ```
 
-On Linux with GCC, the suite builds `tests/fake_vlc.c` into a temporary shared library that emulates the relevant LibVLC 3.x API signatures, injects a rendered test frame, tests playback controls and opens a **real PTY** to exercise the whole terminal application. The shim is **only for automated tests**, not a media decoder. Tests do not require system VLC.
+## Design
 
-**Verification performed for this packaged version:** Python syntax compilation, unit tests, LibVLC **ABI simulation with a C shim**, and interactive PTY rendering/shutdown all passed. The included `samples/sample.mp4` is a valid real H.264/AAC video generated and inspected using FFmpeg. However, **actual LibVLC playback on Windows/macOS/Linux was not run in the build environment** because LibVLC is not installed there. Please run `--doctor` and play the sample locally to verify your specific OS/VLC combination.
+- `src/vlc.rs` — **real LibVLC C-ABI calls loaded with libloading**. LibVLC handles audio output, decoding, playback timing, subtitles, audio tracks, and seeking. Video callback buffers are 32-byte aligned. The display callback produces an owned latest frame for the UI. Windows dynamically auto-configures PATH and plugin paths.
+- `src/renderer.rs` — Ratatui layout, browser, transport gauge and video in the content panel. Supports ANSI TrueColor (`▀`) and monochrome ASCII rendering.
+- `src/app.rs` — keyboard, directory browsing, track cycling, and playback commands.
+- `src/main.rs` — CLI parser, terminal lifecycle, event loop, and initialization.
+- `samples/sample.mp4` — actual 8-second H.264/AAC test clip.
 
-## Troubleshooting
+## Important limitations
 
-* **Cannot load LibVLC**: Install 64-bit VLC 3.x, match Python architecture, or set `TERMVLC_LIBVLC_PATH` to `libvlc.dll`/`.so.5`/`.dylib`.
-* **VLC could not initialize**: VLC plugins may be missing. On Windows, keep the `plugins` directory beside the installed LibVLC DLLs; the project sets `VLC_PLUGIN_PATH` automatically for recognized Windows installation paths.
-* **Blank video with audible audio**: Try a local H.264/AAC MP4, a larger terminal, and `--decode-width 128 --fps 10`. Some formats/VideoLAN builds might not support memory callbacks the same way.
-* **Terminal looks scrambled**: Use a modern terminal with UTF-8 and ANSI TrueColor support; test `--ascii` as a fallback. Don't redirect stdout to a file.
-* **Video is choppy**: Decrease `--fps` (e.g. `--fps 8`) or widen the terminal less. LibVLC itself may remain synchronized while terminal picture updates are dropped.
-* **Codec/plugin or VLC 4 compatibility issues**: This MVP targets the LibVLC **3.x** C ABI specifically; future LibVLC versions may require adapter changes.
+This is a terminal media player targeting **Ratatui**.
+
+- ANSI TrueColor rendering, not Kitty/Sixel image graphics. FPS can be tuned via `--fps` and resolution via `--decode-width`.
+- No playlist saving, disc menus, media database, hardware rendering, or equalizer.
+- URL playback is accepted as a command-line argument; browsing is limited to local files.
+- Test with **VLC 3.x**. Versions must match 64-bit Rust/64-bit VLC.
+
+## Test locally
+
+```bash
+cargo fmt --check
+cargo test
+cargo run -- --doctor
+cargo run -- ./samples/sample.mp4
+```
+
+Verify that you see changing colors (not just the startup screen), hear the sample's tone, can pause/resume and seek, and the terminal is restored after quitting. If an error occurs, save the terminal output.
 
 ## License and upstream references
 
-The **new TermVLC code in this ZIP is MIT licensed**. VLC binaries and plugins are **not** bundled; their separate licenses remain applicable. SparkPlayer is GPL-2.0-only and its code is **not copied** here. See [SOURCE_NOTES.md](SOURCE_NOTES.md) for upstream source links and the reasons for an independent first implementation.
+This original code is MIT-licensed (see `LICENSE`); it does not contain copied SparkPlayer or VLC source. For upstream examples/ideas, see `UPSTREAM.md`. LibVLC and its plugins have their own LGPL/GPL licensing and redistribution rules.

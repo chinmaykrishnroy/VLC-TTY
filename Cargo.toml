@@ -1,0 +1,12 @@
+[package]
+name = "termvlc"
+version = "0.2.0"
+edition = "2021"
+description = "A terminal-first LibVLC video player written in Rust using Ratatui"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+crossterm = "0.28"
+libloading = "0.8"
+ratatui = "0.29"
