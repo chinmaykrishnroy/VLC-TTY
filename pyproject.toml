@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "termvlc-mvp"
+version = "0.1.0"
+description = "A lightweight LibVLC powered terminal video player"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+keywords = ["terminal", "video", "vlc", "libvlc", "tui"]
+
+[project.scripts]
+termvlc = "termvlc.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["termvlc*"]
