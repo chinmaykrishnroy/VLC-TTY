@@ -1,6 +1,6 @@
 //! VLC media player — authentic desktop interface in TUI.
 //! Implements VLC Desktop layout: top menu bar, full-width player/welcome canvas,
-//! timeline slider, VLC controls toolbar, and non-overlapping overlays.
+//! timeline slider, VLC controls toolbar with clean text buttons, and non-overlapping overlays.
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
@@ -26,15 +26,16 @@ const BAR_BG:       Color = Color::Rgb( 28,  32,  38); // Menu & controls bar ba
 
 #[inline]
 fn pixel(frame: &VideoFrame, x: usize, y: usize) -> (u8, u8, u8) {
-    if frame.width == 0 || frame.height == 0 { return (0,0,0); }
-    let ix = x.min(frame.width-1); let iy = y.min(frame.height-1);
+    if frame.width == 0 || frame.height == 0 { return (0, 0, 0); }
+    let ix = x.min(frame.width - 1);
+    let iy = y.min(frame.height - 1);
     let at = iy * frame.pitch + ix * 4;
-    if at + 2 >= frame.bgra.len() { return (0,0,0); }
-    (frame.bgra[at+2], frame.bgra[at+1], frame.bgra[at])
+    if at + 2 >= frame.bgra.len() { return (0, 0, 0); }
+    (frame.bgra[at + 2], frame.bgra[at + 1], frame.bgra[at])
 }
 
 #[inline]
-fn sample(img: &VideoFrame, x: usize, y: usize, w: usize, h: usize) -> (u8,u8,u8) {
+fn sample(img: &VideoFrame, x: usize, y: usize, w: usize, h: usize) -> (u8, u8, u8) {
     pixel(img, x * img.width / w.max(1), y * img.height / h.max(1))
 }
 
@@ -76,7 +77,7 @@ fn render_ansi_video(f: &mut Frame, img: &VideoFrame, area: Rect) {
     }
 }
 
-fn time(ms: i64) -> String {
+pub fn time(ms: i64) -> String {
     let s = ms.max(0) / 1000;
     if s >= 3600 { format!("{:02}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60) }
     else { format!("{:02}:{:02}", s / 60, s % 60) }
@@ -136,7 +137,6 @@ fn vlc_cone_logo(f: &mut Frame, area: Rect) {
 /// Exact VLC Home Page View: Centered cone with clean prompts and instructions
 fn empty_welcome(f: &mut Frame, area: Rect) {
     if area.width < 10 || area.height < 4 { return; }
-    // Clean solid dark background
     f.render_widget(Block::default().style(Style::default().bg(BG_DARK)), area);
 
     let cone_h = 13.min(area.height.saturating_sub(4));
@@ -149,17 +149,18 @@ fn empty_welcome(f: &mut Frame, area: Rect) {
     let text = Paragraph::new(vec![
         Line::styled("VLC media player", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
         Line::styled("Drag and drop any media file here, or press Ctrl+O to open.", Style::default().fg(PALE)),
-        Line::styled("Space: Play/Pause  ·  Ctrl+O: Open File  ·  F: Fullscreen  ·  Tab: Playlist  ·  ?: Help", Style::default().fg(DIM)),
+        Line::styled("Space: Play/Pause  -  Ctrl+O: Open File  -  F: Fullscreen  -  Tab: Playlist  -  ?: Help", Style::default().fg(DIM)),
     ]).alignment(Alignment::Center);
     f.render_widget(text, text_area);
 }
 
-fn video(f: &mut Frame, image: Option<&VideoFrame>, graphics: &mut GraphicsRenderer, area: Rect) {
+fn video(f: &mut Frame, image: Option<&VideoFrame>, graphics: &mut GraphicsRenderer, area: Rect, has_overlay: bool) {
     if area.width == 0 || area.height == 0 { return; }
-    // Solid black fill to avoid ghost pixels in letterbox margins
     f.render_widget(Block::default().style(Style::default().bg(Color::Black)), area);
     if let Some(img) = image {
-        if !graphics.is_ansi() {
+        // If an overlay or dropdown is open over the video, fall back to fast ANSI half-blocks
+        // so the video continues playing smoothly underneath while text widgets render clearly on top!
+        if !graphics.is_ansi() && !has_overlay {
             graphics.draw(f, area);
         } else {
             render_ansi_video(f, img, area);
@@ -187,7 +188,7 @@ fn subtitle(f: &mut Frame, app: &App, info: &PlaybackSnapshot, area: Rect) {
 // ──────────────────────────────────────────────────────────────────────
 fn browser(f: &mut Frame, app: &App, area: Rect, zones: &mut HitZones) {
     if area.width <= 12 { return; }
-    let title = format!(" PLAYLIST · {} ", short(&app.cwd.to_string_lossy(), area.width.saturating_sub(16) as usize));
+    let title = format!(" PLAYLIST - {} ", short(&app.cwd.to_string_lossy(), area.width.saturating_sub(16) as usize));
     let block = Block::default().title(title).borders(Borders::ALL).border_style(Style::default().fg(DIM))
         .style(Style::default().bg(BG_DARK));
     let inner = block.inner(area);
@@ -198,17 +199,17 @@ fn browser(f: &mut Frame, app: &App, area: Rect, zones: &mut HitZones) {
     let first = app.selected.saturating_sub(visible.saturating_sub(1));
     let items: Vec<_> = app.entries.iter().skip(first).take(visible).map(|p| {
         let name = p.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
-        let prefix = if p.is_dir() { "▸ " } else { "  " };
+        let prefix = if p.is_dir() { "[Dir] " } else { "      " };
         let color = if p.is_dir() { ORANGE } else { PALE };
         ListItem::new(Line::styled(
-            format!("{}{}", prefix, short(&name, inner.width.saturating_sub(5) as usize)),
+            format!("{}{}", prefix, short(&name, inner.width.saturating_sub(7) as usize)),
             Style::default().fg(color),
         ))
     }).collect();
 
     let mut state = ListState::default();
     if !items.is_empty() { state.select(Some(app.selected.saturating_sub(first))); }
-    let list = List::new(items).highlight_symbol("▶ ")
+    let list = List::new(items).highlight_symbol("> ")
         .highlight_style(Style::default().fg(Color::Black).bg(CYAN).add_modifier(Modifier::BOLD));
     f.render_stateful_widget(list, inner, &mut state);
     zones.browser = Some((inner, first));
@@ -245,7 +246,7 @@ fn render_menu_bar(f: &mut Frame, area: Rect, app: &App, zones: &mut HitZones) {
 }
 
 // ──────────────────────────────────────────────────────────────────────
-//  Dropdown Menu — Rendered ON TOP at the end of draw() so it's never obscured
+//  Dropdown Menu — Rendered with a solid opaque background so it never disappears over live video
 // ──────────────────────────────────────────────────────────────────────
 fn render_menu_dropdown(f: &mut Frame, app: &App, zones: &mut HitZones) {
     let Some(menu) = app.active_menu else {
@@ -260,11 +261,27 @@ fn render_menu_dropdown(f: &mut Frame, app: &App, zones: &mut HitZones) {
     let box_h = (items.len() as u16 + 2).min(screen.height.saturating_sub(screen.y + 1));
 
     let dropdown_rect = Rect::new(menu_x, screen.y + 1, box_w, box_h);
-    // 1. Clear background
-    f.render_widget(Clear, dropdown_rect);
+
+    // 1. Physically fill every single cell in dropdown_rect with an opaque background
+    let buf = f.buffer_mut();
+    for y in dropdown_rect.y..dropdown_rect.bottom() {
+        for x in dropdown_rect.x..dropdown_rect.right() {
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_char(' ')
+                    .set_bg(Color::Rgb(24, 28, 34))
+                    .set_fg(PALE);
+            }
+        }
+    }
+
     // 2. Draw border and dropdown body
-    f.render_widget(Block::default().borders(Borders::ALL).border_style(Style::default().fg(ORANGE))
-        .style(Style::default().bg(Color::Rgb(24, 28, 34))), dropdown_rect);
+    f.render_widget(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(ORANGE).add_modifier(Modifier::BOLD))
+            .style(Style::default().bg(Color::Rgb(24, 28, 34))),
+        dropdown_rect,
+    );
 
     let inner = dropdown_rect.inner(Margin { horizontal: 1, vertical: 1 });
     let mut hit_items = Vec::new();
@@ -273,12 +290,22 @@ fn render_menu_dropdown(f: &mut Frame, app: &App, zones: &mut HitZones) {
             let row_rect = Rect::new(inner.x, inner.y + i as u16, inner.width, 1);
             hit_items.push((row_rect, i));
             let is_sel = app.menu_selected == i;
-            let style = if is_sel {
-                Style::default().fg(Color::Black).bg(CYAN).add_modifier(Modifier::BOLD)
+            let (fg, bg) = if is_sel {
+                (Color::Black, CYAN)
             } else {
-                Style::default().fg(PALE)
+                (PALE, Color::Rgb(24, 28, 34))
             };
-            f.render_widget(Paragraph::new(format!(" {} ", item)).style(style), row_rect);
+            // Pad the string to the exact width of row_rect so the entire row has an opaque background
+            let padded = format!(" {:<width$}", item, width = inner.width.saturating_sub(1) as usize);
+            f.render_widget(
+                Paragraph::new(padded).style(
+                    Style::default()
+                        .fg(fg)
+                        .bg(bg)
+                        .add_modifier(if is_sel { Modifier::BOLD } else { Modifier::empty() }),
+                ),
+                row_rect,
+            );
         }
     }
     zones.menu_dropdown = Some((dropdown_rect, hit_items));
@@ -288,58 +315,87 @@ fn overlay(f: &mut Frame, app: &App, info: &PlaybackSnapshot, image: Option<&Vid
     let screen = f.area();
     if let Some(dialog) = app.input.as_ref() {
         let boxarea = centered(screen, screen.width.saturating_sub(6).min(88), 7);
-        f.render_widget(Clear, boxarea);
-        let title = if dialog.purpose == InputPurpose::Media { " OPEN MEDIA · file path, directory or URL " }
-            else { " LOAD EXTERNAL SUBTITLE · SRT / VTT / ASS " };
+        zones.overlay_box = Some(boxarea);
+        let buf = f.buffer_mut();
+        for y in boxarea.y..boxarea.bottom() {
+            for x in boxarea.x..boxarea.right() {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_char(' ')
+                        .set_bg(Color::Rgb(20, 23, 28))
+                        .set_fg(PALE);
+                }
+            }
+        }
+        let title = if dialog.purpose == InputPurpose::Media { " OPEN MEDIA / URL - file path, directory or network stream URL " }
+            else { " LOAD EXTERNAL SUBTITLE - SRT / VTT / ASS " };
         f.render_widget(Block::default().title(title).borders(Borders::ALL)
-            .border_style(Style::default().fg(ORANGE)).style(Style::default().bg(Color::Black)), boxarea);
+            .border_style(Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)).style(Style::default().bg(Color::Rgb(20, 23, 28))), boxarea);
         let inner = boxarea.inner(Margin { horizontal: 2, vertical: 2 });
-        f.render_widget(Paragraph::new(format!("> {}▏", dialog.text))
+        f.render_widget(Paragraph::new(format!("> {}|", dialog.text))
             .style(Style::default().fg(PALE).bg(Color::DarkGray)).wrap(Wrap { trim: false }), inner);
         return;
     }
-    if app.overlay == Overlay::None { return; }
-    let size = match app.overlay { Overlay::Help => (66, 24), Overlay::Info => (68, 16), _ => (64, 18) };
+    if app.overlay == Overlay::None {
+        zones.overlay_box = None;
+        return;
+    }
+    let size = match app.overlay { Overlay::Help => (68, 25), Overlay::Info => (70, 17), _ => (64, 18) };
     let dest = centered(screen, screen.width.saturating_sub(4).min(size.0), screen.height.saturating_sub(3).min(size.1));
-    f.render_widget(Clear, dest);
+    zones.overlay_box = Some(dest);
+    let buf = f.buffer_mut();
+    for y in dest.y..dest.bottom() {
+        for x in dest.x..dest.right() {
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_char(' ')
+                    .set_bg(Color::Rgb(20, 23, 28))
+                    .set_fg(PALE);
+            }
+        }
+    }
     let title = match app.overlay {
-        Overlay::Help => " HELP & CONTROLS · VLC media player ",
+        Overlay::Help => " HELP & KEYBOARD CONTROLS - VLC media player ",
         Overlay::Info => " MEDIA & CODEC INFORMATION ",
-        Overlay::SubtitleTracks => " SUBTITLES · Enter to select · L to load external ",
-        Overlay::AudioTracks => " AUDIO TRACKS · Enter to select ",
+        Overlay::SubtitleTracks => " SUBTITLES - Enter to select - L to load external ",
+        Overlay::AudioTracks => " AUDIO TRACKS - Enter to select ",
         _ => "",
     };
     f.render_widget(Block::default().borders(Borders::ALL).title(title)
-        .border_style(Style::default().fg(ORANGE)).style(Style::default().bg(Color::Black)), dest);
+        .border_style(Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)).style(Style::default().bg(Color::Rgb(20, 23, 28))), dest);
     let inner = dest.inner(Margin { horizontal: 2, vertical: 2 });
     match app.overlay {
         Overlay::Help => {
             let text = vec![
-                "OPENING & PLAYBACK          SUBTITLES & AUDIO",
-                "Ctrl+O    Open File dialog   A          Audio tracks menu",
-                "Space     Play / pause       S          Subtitle menu",
-                "← / →     Seek 10s           L          Load subtitle file",
-                "+ / -     Volume ±5%         , / .      Subtitle delay ±100ms",
-                "M         Mute audio         ",
-                "X         Stop playback      INTERFACE & VIEW",
-                "[ / ]     Speed ±0.25x       F / F11    Fullscreen toggle",
-                "N / P     Next / Previous    Tab        Toggle playlist",
-                "G         Renderer: Pixel/ANSI ? / F1     Help",
-                "I         Media information  Q          Quit",
+                "PLAYBACK CONTROLS                SUBTITLES & AUDIO",
+                "Space         Play / Pause       v             Cycle subtitles",
+                "s / x         Stop               b             Cycle audio tracks",
+                "n / p         Next / Previous    Shift+S / S   Subtitle tracks menu",
+                "Left / Right  Seek 10s           Shift+A / A   Audio tracks menu",
+                "Shift+Left/Rt Seek 3s            l / L         Load subtitle file",
+                "Ctrl+Left/Rt  Seek 60s           g / ,         Subtitle delay -100ms",
+                "Alt+Left/Rt   Seek 5 min         h / .         Subtitle delay +100ms",
+                "+ / Ctrl+Up   Volume +5%         j / k         Audio delay -/+100ms",
+                "- / Ctrl+Down Volume -5%         ",
+                "m             Mute / Unmute      INTERFACE & SHORTCUTS",
+                "[ / ]         Speed -/+ 0.25x    f / F11       Fullscreen toggle",
+                "=             Reset speed 1.0x   Tab / Ctrl+L  Toggle playlist/player",
+                "e             Next video frame   Ctrl+O / o    Open file picker",
+                "t             Show time / OSD    Ctrl+N / U    Open stream URL",
+                "i / Ctrl+I    Media information  q / Ctrl+Q    Quit player",
                 "",
-                "DRAG & DROP: Drag any video, audio, or subtitle from Windows",
-                "Explorer directly into the terminal window to play immediately.",
+                "DRAG & DROP: Drag any video, audio, or subtitle from Explorer",
+                "directly into the terminal to start playing immediately.",
             ];
             f.render_widget(Paragraph::new(text.join("\n"))
                 .style(Style::default().fg(PALE)).wrap(Wrap { trim: false }), inner);
         }
         Overlay::Info => {
             let (w, h) = image.map(|x| (x.width, x.height)).unwrap_or((0, 0));
-            let text = format!("Media: {}\n\nPosition: {} / {}\nStatus: {}     Speed: {:.2}×\nVideo resolution: {} × {} pixels (Native Uncapped)\nAudio: {}     Volume: {}%\nSubtitles: {}\nDelay: {} ms\n\nDirect hardware-accelerated decode via native LibVLC 3.x.",
+            let text = format!("Media: {}\n\nPosition: {} / {}\nStatus: {}     Speed: {:.2}x\nVideo resolution: {} x {} pixels (Native Uncapped)\nAudio: {}     Volume: {}%     Audio delay: {} ms\nSubtitles: {}\nSubtitle delay: {} ms\n\nDirect hardware-accelerated decode via native LibVLC 3.x.",
                 app.current.as_deref().unwrap_or("None"),
                 time(info.time_ms), time(info.length_ms),
                 state_label(info.state), info.rate, w, h,
-                app.selected_audio, info.volume, app.selected_subtitle, app.subtitle_delay_ms);
+                app.selected_audio, info.volume, app.audio_delay_ms,
+                app.selected_subtitle, app.subtitle_delay_ms);
             f.render_widget(Paragraph::new(text).wrap(Wrap { trim: false }).style(Style::default().fg(PALE)), inner);
         }
         Overlay::SubtitleTracks | Overlay::AudioTracks => {
@@ -350,8 +406,8 @@ fn overlay(f: &mut Frame, app: &App, info: &PlaybackSnapshot, image: Option<&Vid
                     Style::default().fg(PALE)))).collect();
             let mut state = ListState::default();
             if !items.is_empty() { state.select(Some(app.track_selected.saturating_sub(first))); }
-            f.render_stateful_widget(List::new(items).highlight_symbol("▶ ")
-                .highlight_style(Style::default().bg(CYAN).fg(Color::Black)), inner, &mut state);
+            f.render_stateful_widget(List::new(items).highlight_symbol("> ")
+                .highlight_style(Style::default().bg(CYAN).fg(Color::Black).add_modifier(Modifier::BOLD)), inner, &mut state);
             zones.track_list = Some((inner, first));
         }
         Overlay::None => {}
@@ -369,10 +425,10 @@ pub fn draw(
     let mut zones = HitZones::default();
     let screen = f.area();
     if screen.width < 24 || screen.height < 8 {
-        f.render_widget(Paragraph::new("Expand terminal to at least 24×8"), screen);
+        f.render_widget(Paragraph::new("Expand terminal to at least 24x8"), screen);
         return zones;
     }
-    let graphics_modal = (app.overlay != Overlay::None || app.input.is_some()) && !graphics.is_ansi();
+    let has_active_popup = app.active_menu.is_some() || app.overlay != Overlay::None || app.input.is_some();
 
     if app.fullscreen {
         // ── Fullscreen: Clean edge-to-edge layout with zero leftover text ────
@@ -380,12 +436,12 @@ pub fn draw(
         let show_osd = app.show_osd() || info.state == 3 || info.state == 4;
         let osd_h = if show_osd { 1 } else { 0 };
 
-        // Top bar (height 1): Back button + Current Media Name
+        // Top bar (height 1): Back button + Current Media Name (Text only - NO emojis)
         let top_bar = Rect::new(screen.x, screen.y, screen.width, 1);
         let media_name = app.current.as_deref().unwrap_or("VLC media player");
-        let top_title = format!(" ‹ Back [Esc/F]   ▶ {} ", short(media_name.rsplit(['/', '\\']).next().unwrap_or(media_name), screen.width.saturating_sub(22) as usize));
+        let top_title = format!(" [ Back (Esc) ]  Playing: {} ", short(media_name.rsplit(['/', '\\']).next().unwrap_or(media_name), screen.width.saturating_sub(24) as usize));
         f.render_widget(Paragraph::new(top_title).style(Style::default().bg(Color::Black).fg(ORANGE).add_modifier(Modifier::BOLD)), top_bar);
-        zones.back = Some(Rect::new(screen.x, screen.y, 20.min(screen.width), 1));
+        zones.back = Some(Rect::new(screen.x, screen.y, 16.min(screen.width), 1));
 
         // Video area: strictly between row 1 and (bottom - osd_h)
         let video_area = Rect::new(
@@ -399,7 +455,7 @@ pub fn draw(
             let picture_area = if app.sidecar_enabled && !graphics.is_ansi() {
                 Rect::new(video_area.x, video_area.y, video_area.width, video_area.height.saturating_sub(3))
             } else { video_area };
-            if !graphics_modal { video(f, image, graphics, picture_area); }
+            video(f, image, graphics, picture_area, has_active_popup);
         } else if native_window {
             f.render_widget(Paragraph::new("Native VLC window mode\nVideo is displayed in separate VLC window.")
                 .alignment(Alignment::Center).style(Style::default().fg(DIM)), video_area);
@@ -410,7 +466,7 @@ pub fn draw(
 
         // Bottom OSD bar (height 1):
         if show_osd {
-            let label = format!(" {}   {} / {}   Vol {}%   {:.2}× ",
+            let label = format!(" {}   {} / {}   Vol {}%   {:.2}x ",
                 state_label(info.state), time(info.time_ms), time(info.length_ms), info.volume, info.rate);
             let row = Rect::new(screen.x, screen.bottom().saturating_sub(1), screen.width, 1);
             f.render_widget(Paragraph::new(short(&label, row.width as usize))
@@ -450,7 +506,7 @@ pub fn draw(
             let picture_area = if app.sidecar_enabled && !graphics.is_ansi() {
                 Rect::new(video_area.x, video_area.y, video_area.width, video_area.height.saturating_sub(3))
             } else { video_area };
-            if !graphics_modal { video(f, image, graphics, picture_area); }
+            video(f, image, graphics, picture_area, has_active_popup);
         } else if native_window {
             f.render_widget(Block::default().style(Style::default().bg(BG_DARK)), video_area);
             f.render_widget(Paragraph::new("Native VLC window mode active\nVideo rendered with GPU acceleration.\nTUI controls remain active.")
@@ -489,77 +545,81 @@ pub fn draw(
         zones.timeline = Some(time_layout[1]);
         f.render_widget(Paragraph::new(format!(" {} ", t_total)).style(Style::default().fg(DIM).bg(BAR_BG)), time_layout[2]);
 
-        // 4. VLC Controls Toolbar
+        // 4. VLC Controls Toolbar (Text Buttons - NO emojis)
         let bar = layout[3];
         f.render_widget(Block::default().style(Style::default().bg(BAR_BG)), bar);
         let mut x = bar.x + 1;
 
-        // Play/Pause
-        let play_text = if info.state == 3 { " ❚❚ " } else { " ▶ " };
+        // Play/Pause button
+        let play_text = if info.state == 3 { "[Pause]" } else { "[Play]" };
         let play_w = play_text.len() as u16;
         let play_rect = Rect::new(x, bar.y, play_w, 1);
         f.render_widget(Paragraph::new(play_text).style(Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)), play_rect);
         zones.play = Some(play_rect);
         x += play_w + 1;
 
-        // Previous
-        let prev_rect = Rect::new(x, bar.y, 4, 1);
-        f.render_widget(Paragraph::new(" ⏮ ").style(Style::default().fg(PALE)), prev_rect);
-        zones.prev = Some(prev_rect);
-        x += 5;
-
-        // Stop
-        let stop_rect = Rect::new(x, bar.y, 4, 1);
-        f.render_widget(Paragraph::new(" ■ ").style(Style::default().fg(PALE)), stop_rect);
+        // Stop button
+        let stop_rect = Rect::new(x, bar.y, 6, 1);
+        f.render_widget(Paragraph::new("[Stop]").style(Style::default().fg(PALE)), stop_rect);
         zones.stop = Some(stop_rect);
-        x += 5;
+        x += 7;
 
-        // Next
-        let next_rect = Rect::new(x, bar.y, 4, 1);
-        f.render_widget(Paragraph::new(" ⏭ ").style(Style::default().fg(PALE)), next_rect);
+        // Previous button
+        let prev_rect = Rect::new(x, bar.y, 6, 1);
+        f.render_widget(Paragraph::new("[Prev]").style(Style::default().fg(PALE)), prev_rect);
+        zones.prev = Some(prev_rect);
+        x += 7;
+
+        // Next button
+        let next_rect = Rect::new(x, bar.y, 6, 1);
+        f.render_widget(Paragraph::new("[Next]").style(Style::default().fg(PALE)), next_rect);
         zones.next = Some(next_rect);
-        x += 5;
+        x += 7;
 
-        // Fullscreen
-        let fs_rect = Rect::new(x, bar.y, 4, 1);
-        f.render_widget(Paragraph::new(" ⛶ ").style(Style::default().fg(CYAN)), fs_rect);
+        // Fullscreen button
+        let fs_rect = Rect::new(x, bar.y, 6, 1);
+        f.render_widget(Paragraph::new("[Full]").style(Style::default().fg(CYAN)), fs_rect);
         zones.fullscreen = Some(fs_rect);
-        x += 5;
+        x += 7;
 
-        // Playlist Toggle
+        // Playlist Toggle button
         let pl_style = if app.view_mode == ViewMode::Playlist {
             Style::default().fg(Color::Black).bg(ORANGE).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(PALE)
         };
-        let pl_rect = Rect::new(x, bar.y, 4, 1);
-        f.render_widget(Paragraph::new(" ☰ ").style(pl_style), pl_rect);
+        let pl_rect = Rect::new(x, bar.y, 10, 1);
+        f.render_widget(Paragraph::new("[Playlist]").style(pl_style), pl_rect);
         zones.playlist_toggle = Some(pl_rect);
-        x += 5;
+        x += 11;
 
-        // Subtitles CC
-        let cc_rect = Rect::new(x, bar.y, 5, 1);
-        f.render_widget(Paragraph::new(" CC ").style(Style::default().fg(PALE)), cc_rect);
-        zones.subtitles = Some(cc_rect);
-        x += 6;
+        // Subtitles button
+        let sub_rect = Rect::new(x, bar.y, 6, 1);
+        f.render_widget(Paragraph::new("[Subs]").style(Style::default().fg(PALE)), sub_rect);
+        zones.subtitles = Some(sub_rect);
+        x += 7;
 
-        // Audio Track
-        let au_rect = Rect::new(x, bar.y, 4, 1);
-        f.render_widget(Paragraph::new(" ♫ ").style(Style::default().fg(PALE)), au_rect);
+        // Audio button
+        let au_rect = Rect::new(x, bar.y, 7, 1);
+        f.render_widget(Paragraph::new("[Audio]").style(Style::default().fg(PALE)), au_rect);
         zones.audio = Some(au_rect);
-        x += 5;
+        x += 8;
 
-        // Volume slider on right side
-        let vol_w = 24.min(bar.width.saturating_sub(x));
-        if vol_w >= 10 {
+        // Volume text slider on the right
+        let vol_w = 24.min(bar.width.saturating_sub(x + 1));
+        if vol_w >= 8 {
             let vol_x = bar.right().saturating_sub(vol_w);
             let vol_rect = Rect::new(vol_x, bar.y, vol_w, 1);
             let vol_pct = info.volume.clamp(0, 125);
             let vol_ratio = (vol_pct as f64 / 125.0).clamp(0.0, 1.0);
-            let bar_len = vol_w.saturating_sub(9) as usize;
+            let bar_len = vol_w.saturating_sub(10) as usize;
             let filled = ((vol_ratio * bar_len as f64).round() as usize).min(bar_len);
             let empty = bar_len.saturating_sub(filled);
-            let bar_str = format!("🔊 {}{:>3}%", "━".repeat(filled) + "●" + &"─".repeat(empty.saturating_sub(1)), vol_pct);
+            let bar_str = if bar_len >= 3 {
+                format!("Vol: [{}|{}] {:>3}%", "=".repeat(filled), "-".repeat(empty), vol_pct)
+            } else {
+                format!("Vol: {:>3}%", vol_pct)
+            };
             f.render_widget(Paragraph::new(bar_str).style(Style::default().fg(CYAN).bg(BAR_BG)), vol_rect);
             zones.volume = Some(vol_rect);
         }
@@ -567,12 +627,12 @@ pub fn draw(
         // 5. Status & notification bar
         let message = if let Some(warn) = graphics.warning() { warn.to_string() }
             else if app.status_visible() { app.status.clone() }
-            else { format!("VLC media player ready  ·  {}  ·  Ctrl+O Open  ·  Drag & drop media  ·  Space Play/Pause", graphics.label()) };
+            else { format!("VLC media player ready  -  {}  -  Ctrl+O Open  -  Drag & drop media  -  Space Play/Pause", graphics.label()) };
         f.render_widget(Paragraph::new(short(&message, layout[4].width as usize))
             .style(Style::default().fg(DIM).bg(BAR_BG)), layout[4]);
     }
 
-    // Dropdowns and modals are rendered LAST to guarantee they are displayed on top
+    // Dropdowns and modals are rendered LAST with solid opaque cells to guarantee they are displayed directly over live video
     render_menu_dropdown(f, app, &mut zones);
     overlay(f, app, info, image, &mut zones);
     zones

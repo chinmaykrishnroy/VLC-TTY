@@ -2,7 +2,7 @@
 use std::{fs, path::{Path, PathBuf}, time::{Duration, Instant}};
 use anyhow::Result;
 use ratatui::{layout::Rect, crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind}};
-use crate::{subtitles::SubtitleFile, vlc::VlcPlayer};
+use crate::{renderer::time, subtitles::SubtitleFile, vlc::VlcPlayer};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewMode {
@@ -66,45 +66,50 @@ impl MenuKind {
         match self {
             Self::Media => &[
                 "Open File...               Ctrl+O",
+                "Open Network Stream...     Ctrl+N",
                 "Open Location / URL...     Ctrl+U",
                 "Open Directory...          Ctrl+D",
-                "Quit                       Q",
+                "Quit                       Ctrl+Q",
             ],
             Self::Playback => &[
                 "Play / Pause               Space",
-                "Stop                       X",
+                "Stop                       S / X",
                 "Previous                   P",
                 "Next                       N",
                 "Faster (+0.25x)            ]",
                 "Slower (-0.25x)            [",
-                "Jump Forward 10s           →",
-                "Jump Backward 10s          ←",
+                "Normal Speed (1.0x)        =",
+                "Jump Forward 10s           Right",
+                "Jump Backward 10s          Left",
+                "Next Frame                 E",
             ],
             Self::Audio => &[
-                "Audio Tracks...            A",
-                "Volume Up (+5%)            +",
-                "Volume Down (-5%)          -",
+                "Cycle Audio Track          B",
+                "Audio Tracks Menu...       Shift+A",
+                "Volume Up (+5%)            + / Ctrl+Up",
+                "Volume Down (-5%)          - / Ctrl+Down",
                 "Mute                       M",
             ],
             Self::Video => &[
-                "Fullscreen                 F",
-                "Toggle Renderer            G",
+                "Fullscreen                 F / F11",
+                "Toggle Renderer (Pixel/ANSI) G",
             ],
             Self::Subtitle => &[
-                "Subtitle Tracks...         S",
+                "Cycle Subtitles            V",
+                "Subtitle Tracks Menu...    Shift+S",
                 "Add Subtitle File...       L",
-                "Delay +100 ms              .",
-                "Delay -100 ms              ,",
+                "Delay +100 ms              . / H",
+                "Delay -100 ms              , / G",
             ],
             Self::Tools => &[
-                "Media Information          I",
+                "Media Information          Ctrl+I",
             ],
             Self::View => &[
-                "Toggle Playlist / Player   Tab",
+                "Toggle Playlist / Player   Tab / Ctrl+L",
                 "Refresh Library Files      R",
             ],
             Self::Help => &[
-                "Controls & Help            ?",
+                "Help & Controls            F1 / ?",
                 "About VLC media player",
             ],
         }
@@ -126,6 +131,7 @@ pub struct HitZones {
     pub volume: Option<Rect>,
     pub browser: Option<(Rect, usize)>,
     pub track_list: Option<(Rect, usize)>,
+    pub overlay_box: Option<Rect>,
     pub menu_bar: Vec<(Rect, MenuKind)>,
     pub menu_dropdown: Option<(Rect, Vec<(Rect, usize)>)>,
 }
@@ -159,6 +165,7 @@ pub struct App {
     pub sidecar: Option<SubtitleFile>,
     pub sidecar_enabled: bool,
     pub subtitle_delay_ms: i64,
+    pub audio_delay_ms: i64,
     pub selected_subtitle: String,
     pub selected_audio: String,
     pub last_osd: Instant,
@@ -187,7 +194,7 @@ impl App {
             view_mode: if is_dir_arg { ViewMode::Playlist } else { ViewMode::Player },
             overlay: Overlay::None, input: None, tracks: vec![], track_selected: 0,
             volume: 100, saved_volume: 100, sidecar: None, sidecar_enabled: false,
-            subtitle_delay_ms: 0, selected_subtitle: "Off".into(),
+            subtitle_delay_ms: 0, audio_delay_ms: 0, selected_subtitle: "Off".into(),
             selected_audio: "Default".into(), last_osd: Instant::now(), last_file_click: None,
             active_menu: None, menu_selected: 0,
         };
@@ -318,6 +325,41 @@ impl App {
         self.last_osd = Instant::now();
     }
 
+    pub fn cycle_subtitle(&mut self, player: &mut VlcPlayer) {
+        let mut tracks: Vec<(i32, String)> = vec![(-1, "Off".to_string())];
+        if let Some(ref s) = self.sidecar {
+            tracks.push((-2, format!("External: {}", s.path.file_name().unwrap_or_default().to_string_lossy())));
+        }
+        for t in player.subtitle_tracks() {
+            if t.id != -1 { tracks.push((t.id, t.name)); }
+        }
+        if tracks.is_empty() { self.notify("No subtitle tracks"); return; }
+        let cur_id = player.current_subtitle_id();
+        let cur_idx = tracks.iter().position(|(id, _)| *id == cur_id).unwrap_or(0);
+        let next_idx = (cur_idx + 1) % tracks.len();
+        let (next_id, ref name) = tracks[next_idx];
+        if next_id == -2 {
+            self.sidecar_enabled = true;
+        } else {
+            self.sidecar_enabled = false;
+            player.select_subtitle(next_id);
+        }
+        self.selected_subtitle = name.clone();
+        self.notify(format!("Subtitles: {}", name));
+    }
+
+    pub fn cycle_audio(&mut self, player: &mut VlcPlayer) {
+        let tracks: Vec<_> = player.audio_tracks().into_iter().filter(|t| t.id >= 0).collect();
+        if tracks.is_empty() { self.notify("No audio tracks"); return; }
+        let cur_id = player.current_audio_id();
+        let cur_idx = tracks.iter().position(|t| t.id == cur_id).unwrap_or(0);
+        let next_idx = (cur_idx + 1) % tracks.len();
+        let next = &tracks[next_idx];
+        player.select_audio(next.id);
+        self.selected_audio = next.name.clone();
+        self.notify(format!("Audio: {}", next.name));
+    }
+
     fn choose_track(&mut self, player: &mut VlcPlayer) {
         if let Some(option) = self.tracks.get(self.track_selected).cloned() {
             match option.action {
@@ -388,7 +430,7 @@ impl App {
             self.selected = 0;
             self.refresh();
             self.view_mode = ViewMode::Playlist;
-            self.notify(format!("📂 Switched to: {}", path.display()));
+            self.notify(format!("[Folder] Switched to: {}", path.display()));
         } else if is_subtitle_path(path) {
             self.load_subtitle(path, player)?;
         } else if path.is_file() || trimmed.contains("://") {
@@ -414,24 +456,28 @@ impl App {
             // Media
             (MenuKind::Media, 0) => self.open_file_picker(player)?,
             (MenuKind::Media, 1) => self.input = Some(InputDialog { purpose: InputPurpose::Media, text: String::new() }),
-            (MenuKind::Media, 2) => self.input = Some(InputDialog { purpose: InputPurpose::Media, text: self.cwd.to_string_lossy().into_owned() }),
-            (MenuKind::Media, 3) => return Ok(false), // quit
+            (MenuKind::Media, 2) => self.input = Some(InputDialog { purpose: InputPurpose::Media, text: String::new() }),
+            (MenuKind::Media, 3) => self.input = Some(InputDialog { purpose: InputPurpose::Media, text: self.cwd.to_string_lossy().into_owned() }),
+            (MenuKind::Media, 4) => return Ok(false), // quit
 
             // Playback
             (MenuKind::Playback, 0) => { player.toggle_pause(); self.last_osd = Instant::now(); }
-            (MenuKind::Playback, 1) => { player.stop(); self.notify("■ Stopped"); }
+            (MenuKind::Playback, 1) => { player.stop(); self.notify("Stopped"); }
             (MenuKind::Playback, 2) => self.adjacent(player, -1),
             (MenuKind::Playback, 3) => self.adjacent(player, 1),
-            (MenuKind::Playback, 4) => { player.set_rate((player.rate() + 0.25).min(4.0)); self.notify(format!("Speed {:.2}×", player.rate())); }
-            (MenuKind::Playback, 5) => { player.set_rate((player.rate() - 0.25).max(0.25)); self.notify(format!("Speed {:.2}×", player.rate())); }
-            (MenuKind::Playback, 6) => { player.seek_relative(10_000); self.last_osd = Instant::now(); }
-            (MenuKind::Playback, 7) => { player.seek_relative(-10_000); self.last_osd = Instant::now(); }
+            (MenuKind::Playback, 4) => { player.set_rate((player.rate() + 0.25).min(4.0)); self.notify(format!("Speed {:.2}x", player.rate())); }
+            (MenuKind::Playback, 5) => { player.set_rate((player.rate() - 0.25).max(0.25)); self.notify(format!("Speed {:.2}x", player.rate())); }
+            (MenuKind::Playback, 6) => { player.set_rate(1.0); self.notify("Speed: 1.00x"); }
+            (MenuKind::Playback, 7) => { player.seek_relative(10_000); self.last_osd = Instant::now(); }
+            (MenuKind::Playback, 8) => { player.seek_relative(-10_000); self.last_osd = Instant::now(); }
+            (MenuKind::Playback, 9) => { player.seek_relative(40); self.last_osd = Instant::now(); self.notify("Next frame"); }
 
             // Audio
-            (MenuKind::Audio, 0) => self.open_tracks(Overlay::AudioTracks, player),
-            (MenuKind::Audio, 1) => { self.volume = (self.volume + 5).min(200); player.set_volume(self.volume); self.notify(format!("Volume: {}%", self.volume)); }
-            (MenuKind::Audio, 2) => { self.volume = (self.volume - 5).max(0); player.set_volume(self.volume); self.notify(format!("Volume: {}%", self.volume)); }
-            (MenuKind::Audio, 3) => {
+            (MenuKind::Audio, 0) => self.cycle_audio(player),
+            (MenuKind::Audio, 1) => self.open_tracks(Overlay::AudioTracks, player),
+            (MenuKind::Audio, 2) => { self.volume = (self.volume + 5).min(125); player.set_volume(self.volume); self.notify(format!("Volume: {}%", self.volume)); }
+            (MenuKind::Audio, 3) => { self.volume = self.volume.saturating_sub(5); player.set_volume(self.volume); self.notify(format!("Volume: {}%", self.volume)); }
+            (MenuKind::Audio, 4) => {
                 if self.volume > 0 { self.saved_volume = self.volume; self.volume = 0; }
                 else { self.volume = self.saved_volume.max(10); }
                 player.set_volume(self.volume);
@@ -443,10 +489,11 @@ impl App {
             (MenuKind::Video, 1) => { /* Graphics toggle handled in main */ }
 
             // Subtitle
-            (MenuKind::Subtitle, 0) => self.open_tracks(Overlay::SubtitleTracks, player),
-            (MenuKind::Subtitle, 1) => self.input = Some(InputDialog { purpose: InputPurpose::Subtitle, text: String::new() }),
-            (MenuKind::Subtitle, 2) => { self.subtitle_delay_ms += 100; self.notify(format!("Subtitle delay: {} ms", self.subtitle_delay_ms)); }
-            (MenuKind::Subtitle, 3) => { self.subtitle_delay_ms -= 100; self.notify(format!("Subtitle delay: {} ms", self.subtitle_delay_ms)); }
+            (MenuKind::Subtitle, 0) => self.cycle_subtitle(player),
+            (MenuKind::Subtitle, 1) => self.open_tracks(Overlay::SubtitleTracks, player),
+            (MenuKind::Subtitle, 2) => self.input = Some(InputDialog { purpose: InputPurpose::Subtitle, text: String::new() }),
+            (MenuKind::Subtitle, 3) => { self.subtitle_delay_ms += 100; self.notify(format!("Subtitle delay: {} ms", self.subtitle_delay_ms)); }
+            (MenuKind::Subtitle, 4) => { self.subtitle_delay_ms -= 100; self.notify(format!("Subtitle delay: {} ms", self.subtitle_delay_ms)); }
 
             // Tools
             (MenuKind::Tools, 0) => self.overlay = Overlay::Info,
@@ -456,8 +503,7 @@ impl App {
             (MenuKind::View, 1) => self.refresh(),
 
             // Help
-            (MenuKind::Help, 0) => self.overlay = Overlay::Help,
-            (MenuKind::Help, 1) => self.overlay = Overlay::Help,
+            (MenuKind::Help, 0) | (MenuKind::Help, 1) => self.overlay = Overlay::Help,
             _ => {}
         }
         Ok(true)
@@ -506,54 +552,143 @@ impl App {
 
         if self.overlay == Overlay::SubtitleTracks || self.overlay == Overlay::AudioTracks {
             match key.code {
-                KeyCode::Esc | KeyCode::Char('s') | KeyCode::Char('a') => self.overlay = Overlay::None,
+                KeyCode::Esc | KeyCode::Char('v') | KeyCode::Char('b') => self.overlay = Overlay::None,
                 KeyCode::Up | KeyCode::Char('k') => self.track_selected = self.track_selected.saturating_sub(1),
                 KeyCode::Down | KeyCode::Char('j') => self.track_selected = (self.track_selected + 1).min(self.tracks.len().saturating_sub(1)),
-                KeyCode::Enter => self.choose_track(player),
+                KeyCode::Enter => { self.choose_track(player); self.overlay = Overlay::None; }
                 _ => {}
             }
             return Ok(true);
         }
 
         if self.overlay != Overlay::None {
-            self.overlay = Overlay::None;
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('i') | KeyCode::Char('?') | KeyCode::F(1) => self.overlay = Overlay::None,
+                _ => {}
+            }
             return Ok(true);
         }
 
-        // Ctrl combinations
+        // Ctrl combinations (standard VLC desktop shortcuts)
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
                 KeyCode::Char('o') => { self.open_file_picker(player)?; return Ok(true); }
-                KeyCode::Char('u') => { self.input = Some(InputDialog { purpose: InputPurpose::Media, text: String::new() }); return Ok(true); }
-                KeyCode::Char('d') => { self.input = Some(InputDialog { purpose: InputPurpose::Media, text: self.cwd.to_string_lossy().into_owned() }); return Ok(true); }
+                KeyCode::Char('n') | KeyCode::Char('u') => {
+                    self.input = Some(InputDialog { purpose: InputPurpose::Media, text: String::new() });
+                    return Ok(true);
+                }
+                KeyCode::Char('d') => {
+                    self.input = Some(InputDialog { purpose: InputPurpose::Media, text: self.cwd.to_string_lossy().into_owned() });
+                    return Ok(true);
+                }
+                KeyCode::Char('l') => {
+                    self.view_mode = if self.view_mode == ViewMode::Player { ViewMode::Playlist } else { ViewMode::Player };
+                    return Ok(true);
+                }
+                KeyCode::Char('i') => { self.overlay = Overlay::Info; return Ok(true); }
                 KeyCode::Char('q') => return Ok(false),
+                KeyCode::Up => {
+                    self.volume = (self.volume + 5).min(125);
+                    player.set_volume(self.volume);
+                    self.notify(format!("Volume: {}%", self.volume));
+                    return Ok(true);
+                }
+                KeyCode::Down => {
+                    self.volume = self.volume.saturating_sub(5);
+                    player.set_volume(self.volume);
+                    self.notify(format!("Volume: {}%", self.volume));
+                    return Ok(true);
+                }
+                KeyCode::Left => {
+                    player.seek_relative(-60_000); // 1 minute backward
+                    self.last_osd = Instant::now();
+                    self.notify("Seek -1 min");
+                    return Ok(true);
+                }
+                KeyCode::Right => {
+                    player.seek_relative(60_000); // 1 minute forward
+                    self.last_osd = Instant::now();
+                    self.notify("Seek +1 min");
+                    return Ok(true);
+                }
                 _ => {}
             }
         }
 
+        // Alt combinations (VLC long jump)
+        if key.modifiers.contains(KeyModifiers::ALT) {
+            match key.code {
+                KeyCode::Left => {
+                    player.seek_relative(-300_000); // 5 minutes backward
+                    self.last_osd = Instant::now();
+                    self.notify("Seek -5 min");
+                    return Ok(true);
+                }
+                KeyCode::Right => {
+                    player.seek_relative(300_000); // 5 minutes forward
+                    self.last_osd = Instant::now();
+                    self.notify("Seek +5 min");
+                    return Ok(true);
+                }
+                _ => {}
+            }
+        }
+
+        // Shift combinations (VLC very short jump 3s / dialogs)
+        if key.modifiers.contains(KeyModifiers::SHIFT) {
+            match key.code {
+                KeyCode::Left => {
+                    player.seek_relative(-3_000); // 3 seconds backward
+                    self.last_osd = Instant::now();
+                    return Ok(true);
+                }
+                KeyCode::Right => {
+                    player.seek_relative(3_000); // 3 seconds forward
+                    self.last_osd = Instant::now();
+                    return Ok(true);
+                }
+                KeyCode::Char('S') => { self.open_tracks(Overlay::SubtitleTracks, player); return Ok(true); }
+                KeyCode::Char('A') => { self.open_tracks(Overlay::AudioTracks, player); return Ok(true); }
+                _ => {}
+            }
+        }
+
+        // Standard key bindings
         match key.code {
             KeyCode::Char('q') => return Ok(false),
             KeyCode::Esc => { if self.fullscreen { self.toggle_fullscreen(); } },
             KeyCode::F(11) | KeyCode::Char('f') => self.toggle_fullscreen(),
             KeyCode::Char(' ') => { player.toggle_pause(); self.last_osd = Instant::now(); },
-            KeyCode::Char('x') => { player.stop(); self.notify("■ Stopped"); },
+            KeyCode::Char('s') | KeyCode::Char('x') => { player.stop(); self.notify("Stopped"); },
             KeyCode::Left => { player.seek_relative(-10_000); self.last_osd = Instant::now(); },
             KeyCode::Right => { player.seek_relative(10_000); self.last_osd = Instant::now(); },
-            KeyCode::Char('+') | KeyCode::Char('=') => { self.volume = (self.volume + 5).min(200); player.set_volume(self.volume); self.notify(format!("Volume: {}%", self.volume)); },
-            KeyCode::Char('-') => { self.volume = (self.volume - 5).max(0); player.set_volume(self.volume); self.notify(format!("Volume: {}%", self.volume)); },
-            KeyCode::Char('m') => { if self.volume > 0 { self.saved_volume = self.volume; self.volume = 0; }
+            KeyCode::Char('+') => { self.volume = (self.volume + 5).min(125); player.set_volume(self.volume); self.notify(format!("Volume: {}%", self.volume)); },
+            KeyCode::Char('-') => { self.volume = self.volume.saturating_sub(5); player.set_volume(self.volume); self.notify(format!("Volume: {}%", self.volume)); },
+            KeyCode::Char('m') => {
+                if self.volume > 0 { self.saved_volume = self.volume; self.volume = 0; }
                 else { self.volume = self.saved_volume.max(10); }
-                player.set_volume(self.volume); self.notify(if self.volume == 0 { "Muted".into() } else { format!("Volume: {}%", self.volume) }); },
-            KeyCode::Char('[') => { player.set_rate((player.rate() - 0.25).max(0.25)); self.notify(format!("Speed {:.2}×", player.rate())); },
-            KeyCode::Char(']') => { player.set_rate((player.rate() + 0.25).min(4.0)); self.notify(format!("Speed {:.2}×", player.rate())); },
-            KeyCode::Char('s') => self.open_tracks(Overlay::SubtitleTracks, player),
-            KeyCode::Char('a') => self.open_tracks(Overlay::AudioTracks, player),
+                player.set_volume(self.volume);
+                self.notify(if self.volume == 0 { "Muted".into() } else { format!("Volume: {}%", self.volume) });
+            },
+            KeyCode::Char('[') => { player.set_rate((player.rate() - 0.25).max(0.25)); self.notify(format!("Speed {:.2}x", player.rate())); },
+            KeyCode::Char(']') => { player.set_rate((player.rate() + 0.25).min(4.0)); self.notify(format!("Speed {:.2}x", player.rate())); },
+            KeyCode::Char('=') => { player.set_rate(1.0); self.notify("Speed: 1.00x"); },
+            KeyCode::Char('e') => { player.seek_relative(40); self.last_osd = Instant::now(); self.notify("Next frame"); },
+            KeyCode::Char('t') => {
+                let snap = player.snapshot();
+                self.last_osd = Instant::now();
+                self.notify(format!("Time: {} / {}", time(snap.time_ms), time(snap.length_ms)));
+            },
+            KeyCode::Char('v') => self.cycle_subtitle(player),
+            KeyCode::Char('b') => self.cycle_audio(player),
             KeyCode::Char('L') | KeyCode::Char('l') => self.input = Some(InputDialog { purpose: InputPurpose::Subtitle, text: String::new() }),
             KeyCode::Char('o') => self.open_file_picker(player)?,
             KeyCode::Char('?') | KeyCode::F(1) => self.overlay = Overlay::Help,
             KeyCode::Char('i') => self.overlay = Overlay::Info,
-            KeyCode::Char(',') => { self.subtitle_delay_ms -= 100; self.notify(format!("Subtitle delay: {} ms", self.subtitle_delay_ms)); },
-            KeyCode::Char('.') => { self.subtitle_delay_ms += 100; self.notify(format!("Subtitle delay: {} ms", self.subtitle_delay_ms)); },
+            KeyCode::Char(',') | KeyCode::Char('g') => { self.subtitle_delay_ms -= 100; self.notify(format!("Subtitle delay: {} ms", self.subtitle_delay_ms)); },
+            KeyCode::Char('.') | KeyCode::Char('h') => { self.subtitle_delay_ms += 100; self.notify(format!("Subtitle delay: {} ms", self.subtitle_delay_ms)); },
+            KeyCode::Char('j') if self.view_mode != ViewMode::Playlist => { self.audio_delay_ms -= 100; self.notify(format!("Audio delay: {} ms", self.audio_delay_ms)); },
+            KeyCode::Char('k') if self.view_mode != ViewMode::Playlist => { self.audio_delay_ms += 100; self.notify(format!("Audio delay: {} ms", self.audio_delay_ms)); },
             KeyCode::Char('n') => self.adjacent(player, 1),
             KeyCode::Char('p') => self.adjacent(player, -1),
             KeyCode::Tab => self.view_mode = if self.view_mode == ViewMode::Player { ViewMode::Playlist } else { ViewMode::Player },
@@ -592,7 +727,7 @@ impl App {
         }
 
         // 2. Click inside open dropdown menu
-        if let Some((_, ref items)) = zones.menu_dropdown {
+        if let Some((dropdown_box, ref items)) = zones.menu_dropdown {
             if matches!(evt.kind, MouseEventKind::Down(MouseButton::Left)) {
                 if let Some(menu) = self.active_menu {
                     for (item_rect, idx) in items {
@@ -603,7 +738,11 @@ impl App {
                         }
                     }
                 }
-                self.active_menu = None;
+                // If clicked outside dropdown box, dismiss it
+                if !hit(Some(dropdown_box), x, y) {
+                    self.active_menu = None;
+                    return Ok(());
+                }
                 return Ok(());
             }
         }
@@ -614,23 +753,38 @@ impl App {
             return Ok(());
         }
 
-        if self.overlay == Overlay::SubtitleTracks || self.overlay == Overlay::AudioTracks {
-            match evt.kind {
-                MouseEventKind::Down(MouseButton::Left) => {
-                    if let Some((rect, first)) = zones.track_list.filter(|(r, _)| hit(Some(*r), x, y)) {
-                        let choice = first + usize::from(y - rect.y);
-                        if choice < self.tracks.len() { self.track_selected = choice; self.choose_track(player); }
-                    } else { self.overlay = Overlay::None; }
-                }
-                MouseEventKind::ScrollDown => self.track_selected = (self.track_selected + 1).min(self.tracks.len().saturating_sub(1)),
-                MouseEventKind::ScrollUp => self.track_selected = self.track_selected.saturating_sub(1),
-                _ => {}
-            }
-            return Ok(());
-        }
-
+        // 3. Overlay dialog clicks (Help, Info, Subtitle tracks, Audio tracks)
         if self.overlay != Overlay::None {
-            if matches!(evt.kind, MouseEventKind::Down(MouseButton::Left)) { self.overlay = Overlay::None; }
+            if matches!(evt.kind, MouseEventKind::Down(MouseButton::Left)) {
+                if let Some(box_rect) = zones.overlay_box {
+                    if hit(Some(box_rect), x, y) {
+                        // Clicked inside modal dialog: handle track item selection if applicable
+                        if self.overlay == Overlay::SubtitleTracks || self.overlay == Overlay::AudioTracks {
+                            if let Some((rect, first)) = zones.track_list.filter(|(r, _)| hit(Some(*r), x, y)) {
+                                let choice = first + usize::from(y.saturating_sub(rect.y));
+                                if choice < self.tracks.len() {
+                                    self.track_selected = choice;
+                                    self.choose_track(player);
+                                    self.overlay = Overlay::None;
+                                }
+                            }
+                        }
+                        return Ok(());
+                    } else {
+                        // Clicked outside modal dialog: dismiss it
+                        self.overlay = Overlay::None;
+                        return Ok(());
+                    }
+                }
+            }
+            if self.overlay == Overlay::SubtitleTracks || self.overlay == Overlay::AudioTracks {
+                match evt.kind {
+                    MouseEventKind::ScrollDown => self.track_selected = (self.track_selected + 1).min(self.tracks.len().saturating_sub(1)),
+                    MouseEventKind::ScrollUp => self.track_selected = self.track_selected.saturating_sub(1),
+                    _ => {}
+                }
+                return Ok(());
+            }
             return Ok(());
         }
 
@@ -639,7 +793,7 @@ impl App {
                 if self.fullscreen && hit(zones.back, x, y) { self.toggle_fullscreen(); }
                 else if hit(zones.fullscreen, x, y) { self.toggle_fullscreen(); }
                 else if hit(zones.play, x, y) { player.toggle_pause(); self.last_osd = Instant::now(); }
-                else if hit(zones.stop, x, y) { player.stop(); self.notify("■ Stopped"); }
+                else if hit(zones.stop, x, y) { player.stop(); self.notify("Stopped"); }
                 else if hit(zones.prev, x, y) { self.adjacent(player, -1); }
                 else if hit(zones.next, x, y) { self.adjacent(player, 1); }
                 else if hit(zones.playlist_toggle, x, y) {
@@ -652,7 +806,7 @@ impl App {
                     let new_vol = (frac * 125.0).round() as i32;
                     self.volume = new_vol;
                     player.set_volume(new_vol);
-                    self.notify(format!("🔊 Volume: {new_vol}%"));
+                    self.notify(format!("Volume: {new_vol}%"));
                 }
                 else if let Some(progress) = zones.timeline.filter(|r| hit(Some(*r), x, y)) {
                     let snap = player.snapshot();
@@ -693,12 +847,12 @@ impl App {
             MouseEventKind::ScrollUp => {
                 self.volume = (self.volume + 5).min(125);
                 player.set_volume(self.volume);
-                self.notify(format!("🔊 Volume: {}%", self.volume));
+                self.notify(format!("Volume: {}%", self.volume));
             }
             MouseEventKind::ScrollDown => {
                 self.volume = self.volume.saturating_sub(5);
                 player.set_volume(self.volume);
-                self.notify(format!("🔊 Volume: {}%", self.volume));
+                self.notify(format!("Volume: {}%", self.volume));
             }
             _ => {}
         }

@@ -156,7 +156,6 @@ fn run() -> Result<()> {
     let mut zones=HitZones::default();
     let mut previous_fullscreen=app.fullscreen;
     let mut previous_media=app.current.clone();
-    let mut previous_modal=(app.overlay,app.input.is_some());
     let mut last_draw=Instant::now()-Duration::from_secs(1);
     let interval=Duration::from_millis((1000/opts.fps.max(1)) as u64);
     loop {
@@ -197,13 +196,11 @@ fn run() -> Result<()> {
                 _=>{}
             }
         }
-        if previous_fullscreen!=app.fullscreen || previous_media!=app.current
-            || previous_modal!=(app.overlay,app.input.is_some()) {
+        if previous_fullscreen != app.fullscreen || previous_media != app.current {
             terminal.clear()?;
             graphics.invalidate();
-            previous_fullscreen=app.fullscreen;
-            previous_media=app.current.clone();
-            previous_modal=(app.overlay,app.input.is_some());
+            previous_fullscreen = app.fullscreen;
+            previous_media = app.current.clone();
         }
         let frame=if opts.native_window {None}else{player.latest_frame()};
         if !opts.native_window {graphics.prepare(frame.clone());}

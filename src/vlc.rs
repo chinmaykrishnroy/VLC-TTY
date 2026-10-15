@@ -511,7 +511,7 @@ mod tests {
             Ok(p) => p,
             Err(_) => return,
         };
-        let file = r"E:\data\Media\TV\Breaking Bad\Season 02\Breaking Bad - S02E03.mkv";
+        let file = r"samples\sample.mp4";
         if std::path::Path::new(file).exists() {
             let res = player.open(file);
             assert!(res.is_ok(), "Failed to open video: {:?}", res);
@@ -520,5 +520,64 @@ mod tests {
             // State 3 is Playing, State 1/2 is Opening/Buffering
             assert!(snap.state == 3 || snap.state == 1 || snap.state == 2, "Expected playing state, got {}", snap.state);
         }
+    }
+
+    #[test]
+    fn test_http_network_stream_playback() {
+        use std::net::TcpListener;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::io::{Read, Write};
+
+        let mut player = match VlcPlayer::new() {
+            Ok(p) => p,
+            Err(e) => { eprintln!("LibVLC unavailable: {e:#}"); return; }
+        };
+
+        let sample = std::path::Path::new("samples/sample.mp4");
+        if !sample.exists() { return; }
+        let video_data = std::fs::read(sample).expect("read sample");
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind free port");
+        let port = listener.local_addr().expect("port").port();
+        let running = Arc::new(AtomicBool::new(true));
+        let r_clone = Arc::clone(&running);
+        let v_bytes = video_data.clone();
+
+        let srv = std::thread::spawn(move || {
+            listener.set_nonblocking(true).ok();
+            while r_clone.load(Ordering::Relaxed) {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    let mut req_buf = [0u8; 1024];
+                    let _ = stream.read(&mut req_buf);
+                    let hdr = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
+                        v_bytes.len()
+                    );
+                    let _ = stream.write_all(hdr.as_bytes());
+                    let _ = stream.write_all(&v_bytes);
+                    let _ = stream.flush();
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        });
+
+        let url = format!("http://127.0.0.1:{}/sample.mp4", port);
+        let res = player.open(&url);
+        assert!(res.is_ok(), "Failed to open network stream: {:?}", res);
+
+        let mut streaming = false;
+        for _ in 0..30 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let snap = player.snapshot();
+            if snap.state == 3 || snap.state == 2 || snap.frames > 0 {
+                streaming = true;
+                break;
+            }
+        }
+        assert!(streaming, "Network stream failed to start playing");
+
+        player.stop();
+        running.store(false, Ordering::Relaxed);
+        let _ = srv.join();
     }
 }
