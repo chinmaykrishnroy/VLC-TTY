@@ -8,7 +8,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Gauge, List, ListItem, ListState, Paragraph, Wrap},
 };
-use crate::{app::App, vlc::{PlaybackSnapshot, VideoFrame}};
+use crate::{app::App, graphics::GraphicsRenderer, vlc::{PlaybackSnapshot, VideoFrame}};
 
 fn pixel(frame: &VideoFrame, x: usize, y: usize) -> (u8, u8, u8) {
     if frame.width == 0 || frame.height == 0 { return (0, 0, 0); }
@@ -34,25 +34,10 @@ fn fit_dimensions(frame: &VideoFrame, area: Rect) -> (usize, usize) {
     (width, height)
 }
 
-fn video_lines(frame: &VideoFrame, area: Rect, ascii_mode: bool) -> Vec<Line<'static>> {
+fn video_lines(frame: &VideoFrame, area: Rect) -> Vec<Line<'static>> {
     let (width, height) = fit_dimensions(frame, area);
     if width == 0 || height == 0 { return Vec::new(); }
     let mut rows = Vec::with_capacity(height / 2);
-    if ascii_mode {
-        const RAMP: &[u8] = b" .:-=+*#%@";
-        for y in 0..height / 2 {
-            let mut spans = Vec::with_capacity(width);
-            for x in 0..width {
-                let (r, g, b) = sample(frame, x, y * 2, width, height);
-                let brightness = (0.2126 * r as f64 + 0.7152 * g as f64 + 0.0722 * b as f64) / 255.0;
-                let idx = (brightness * (RAMP.len() - 1) as f64).round() as usize;
-                let ch = RAMP[idx.min(RAMP.len() - 1)] as char;
-                spans.push(Span::styled(ch.to_string(), Style::default().fg(Color::White)));
-            }
-            rows.push(Line::from(spans));
-        }
-        return rows;
-    }
     for y in 0..height / 2 {
         let mut spans = Vec::with_capacity(width);
         for x in 0..width {
@@ -70,7 +55,7 @@ fn human_time(ms: i64) -> String {
     format!("{:02}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60)
 }
 
-pub fn draw(f: &mut Frame, app: &App, info: &PlaybackSnapshot, image: Option<&VideoFrame>, ascii_mode: bool) {
+pub fn draw(f: &mut Frame, app: &App, info: &PlaybackSnapshot, image: Option<&VideoFrame>, graphics: &mut GraphicsRenderer, native_window: bool) {
     let area = f.area();
     if area.width < 25 || area.height < 9 {
         f.render_widget(Paragraph::new("Increase terminal size (min. 25 columns × 9 rows)").wrap(Wrap { trim: true }), area);
@@ -78,25 +63,11 @@ pub fn draw(f: &mut Frame, app: &App, info: &PlaybackSnapshot, image: Option<&Vi
     }
     let layout = Layout::default().direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(5), Constraint::Length(3), Constraint::Length(2)]).split(area);
-    let header_status = if !app.message.is_empty() {
-        Span::styled(format!("  {}  ", app.message), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
-    } else {
-        Span::styled(
-            if info.state == 3 { "  PLAYING  " }
-            else if info.state == 4 { "  PAUSED  " }
-            else if info.state == 6 { "  ENDED  " }
-            else { "  READY  " },
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-        )
-    };
-    let mode_str = if ascii_mode { " [ASCII] " } else { " [TRUECOLOR] " };
     let header = Paragraph::new(Line::from(vec![
         Span::styled(" TERM", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         Span::styled("VLC ", Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
-        Span::raw(" Rust · LibVLC · Ratatui"),
-        Span::styled(mode_str, Style::default().fg(Color::DarkGray)),
-        Span::raw("|"),
-        header_status,
+        Span::raw(format!("  {}  |  ", if native_window { "Native VLC window".to_owned() } else { graphics.label() })),
+        Span::styled(if info.state == 3 { "PLAYING" } else if info.state == 4 { "PAUSED" } else if info.state == 6 { "ENDED" } else { "READY" }, Style::default().fg(Color::Green)),
     ])).block(Block::default().borders(Borders::ALL).title(" TERMINAL VIDEO PLAYER "));
     f.render_widget(header, layout[0]);
 
@@ -127,14 +98,19 @@ pub fn draw(f: &mut Frame, app: &App, info: &PlaybackSnapshot, image: Option<&Vi
     let inner = box_video.inner(cols[1]);
     f.render_widget(box_video, cols[1]);
     if let Some(img) = image {
-        let lines = video_lines(img, inner, ascii_mode);
+        if !graphics.is_ansi() {
+            graphics.draw(f, inner);
+        } else {
+        let lines = video_lines(img, inner);
         let video_height = lines.len() as u16;
         let offset_y = inner.height.saturating_sub(video_height) / 2;
         let dest = Rect { x: inner.x, y: inner.y + offset_y, width: inner.width, height: video_height.min(inner.height) };
         f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), dest);
+        }
     } else {
         let message = if info.state == 1 || info.state == 2 { "Loading / buffering video…" }
-                      else { "Select a video and press Enter\n\nANSI rendering\nAudio and A/V sync: LibVLC" };
+                      else if native_window { "Native VLC window: video should open in a separate window.\nKeep TermVLC focused for keyboard controls." }
+                      else { "Select a video and press Enter\n\nAuto graphics: Kitty / Sixel / iTerm2 / ANSI fallback\nAudio and A/V sync: LibVLC" };
         f.render_widget(Paragraph::new(message).alignment(Alignment::Center).wrap(Wrap { trim: true }), inner.inner(Margin { horizontal: 1, vertical: 1 }));
     }
 
@@ -144,7 +120,7 @@ pub fn draw(f: &mut Frame, app: &App, info: &PlaybackSnapshot, image: Option<&Vi
         .gauge_style(Style::default().fg(Color::Cyan).bg(Color::DarkGray))
         .ratio(progress_ratio).label("");
     f.render_widget(progress, layout[2]);
-    let footer_text = "Space Pause  ←/→ ±10s  S Subs  A Audio  N/P Next/Prev  ↑/↓ Browse  Enter Open  Backspace Parent  +/- Vol  M Mute  F Focus  [/] Speed  Q Quit";
+    let footer_text = "Space Pause  ←/→ ±10s  ↑/↓ Browse  Enter Open  Backspace Parent  +/- Vol  M Mute  F Focus  G Graphics/ANSI  [/] Speed  Q Quit";
     f.render_widget(Paragraph::new(footer_text).style(Style::default().fg(Color::Gray)).wrap(Wrap { trim: false }), layout[3]);
 }
 

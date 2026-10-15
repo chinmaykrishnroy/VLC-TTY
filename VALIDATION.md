@@ -1,12 +1,27 @@
-# Build/test report (this packaging environment)
+# Validation — TermVLC v0.4.0 (source candidate)
 
-- Rust files created: `main.rs`, `app.rs`, `vlc.rs`, `renderer.rs`.
-- `Cargo.toml` includes `ratatui`, `crossterm`, `libloading`, `anyhow`.
-- Local source-integrity checks: passed (files present, valid UTF-8, no control characters).
-- Bundled `samples/sample.mp4`: `ffprobe` **passed** — H.264 320×180 video + AAC audio, 8.0 seconds.
-- `cargo test`: **NOT RUN** — `cargo` is not installed (`cargo: command not found`).
-- LibVLC playback: **NOT RUN** — LibVLC shared library unavailable in this container.
-- Git clone: **NOT RUN** — host DNS was unavailable (`Could not resolve host: github.com`).
-- Windows/macOS/Linux user-machine tests: **NOT RUN**.
+## Verified in packaging environment
 
-The project is therefore a source implementation with unverified Rust compilation/playback. Do not treat it as an officially tested binary. A Windows smoke script is provided at `scripts/windows-run.ps1`, and the `src/vlc.rs` tests include a mock-format video buffer callback round trip that can run without LibVLC installed (once Cargo is available).
+- Three-platform CLI instructions and helper scripts exist, are nonempty, and are included in the archive.
+- OS-specific LibVLC candidate paths include the Windows `libvlc.dll`, Linux `libvlc.so.5`, macOS VLC.app layout plus Intel/Apple Silicon Homebrew library prefixes.
+- `app.rs` uses `ratatui::crossterm` instead of relying on an undeclared direct `crossterm` dependency (fixed from v0.3).
+- CI is configured for Windows, Ubuntu, and macOS compilation and unit tests; **it has not yet been run**.
+- Cargo manifest and workflow YAML structurally parse. Archive ZIP integrity checked.
+- Bundled sample MP4 is present and FFprobe-readable.
+
+## Not verified
+
+- `cargo build`, `cargo test`, Rust formatting and Clippy: no Rust toolchain/crates registry available in the sandbox.
+- Real LibVLC video decoding/audio playback on Windows, Linux, or macOS.
+- Terminal graphics autodetection, protocol redraw performance, or high-FPS playback.
+- Native-window behavior on each OS.
+
+## Local acceptance matrix
+
+| Platform | Minimum tests |
+| --- | --- |
+| Windows 11 | `cargo test`; `--doctor`; auto graphics; Sixel if supported; ANSI; `--native-window`; clean exit |
+| Linux | Same, then Kitty/Sixel with a compatible emulator, resize and SSH checks |
+| macOS Intel/ARM | Same, iTerm2/Kitty graphic paths, VLC.app plugin loading, native-window test |
+
+Please capture the **first failing command and full error output** instead of assuming the package is a verified release.

@@ -1,0 +1,33 @@
+name: Rust CI (Windows first, Linux + macOS)
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  compile-and-unit-test:
+    name: ${{ matrix.os }} / ${{ matrix.arch_label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            arch_label: x86_64
+          - os: ubuntu-latest
+            arch_label: x86_64
+          - os: macos-15
+            arch_label: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Compile and test core (does not require VLC installed)
+        run: cargo test --all-targets
+      - name: Release build
+        run: cargo build --release
+      - name: Smoke test command parser
+        run: cargo run --release -- --help
+
+# NOTE: CI validates compilation/tests only. A separate human-run matrix
+# must confirm real LibVLC decoding, audio and image protocols per terminal.

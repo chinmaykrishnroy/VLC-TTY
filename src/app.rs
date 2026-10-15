@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, MouseEvent, MouseEventKind, MouseButton};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, MouseEvent, MouseEventKind, MouseButton};
 use crate::vlc::VlcPlayer;
 
 #[derive(Debug)]
@@ -64,31 +64,12 @@ impl App {
         }
     }
 
-    pub fn adjacent(&mut self, player: &mut VlcPlayer, step: isize) -> Result<()> {
-        let files: Vec<(usize, &PathBuf)> = self.entries.iter().enumerate().filter(|(_, p)| p.is_file()).collect();
-        if files.is_empty() { return Ok(()); }
-        let current_path = self.current.as_deref().map(Path::new);
-        let curr_idx = current_path.and_then(|cp| files.iter().position(|(_, p)| p.as_path() == cp));
-        let next_pos = match curr_idx {
-            Some(i) => (i as isize + step).rem_euclid(files.len() as isize) as usize,
-            None => if step > 0 { 0 } else { files.len() - 1 },
-        };
-        let (entry_idx, next_path) = files[next_pos];
-        self.selected = entry_idx;
-        let path_str = next_path.to_string_lossy().into_owned();
-        match player.open(&path_str) {
-            Ok(()) => self.set_current(path_str),
-            Err(e) => self.message = format!("Error: {e:#}"),
-        }
-        Ok(())
-    }
-
     pub fn handle_key(&mut self, key: KeyEvent, player: &mut VlcPlayer) -> Result<bool> {
         match key.code {
             KeyCode::Char('q') | KeyCode::Esc => return Ok(false),
             KeyCode::Char(' ') => player.toggle_pause(),
-            KeyCode::Left | KeyCode::Char('h') => player.seek_relative(-10_000),
-            KeyCode::Right | KeyCode::Char('l') => player.seek_relative(10_000),
+            KeyCode::Left => player.seek_relative(-10_000),
+            KeyCode::Right => player.seek_relative(10_000),
             KeyCode::Char('+') | KeyCode::Char('=') => { self.volume = (self.volume + 5).min(200); player.set_volume(self.volume); }
             KeyCode::Char('-') => { self.volume = (self.volume - 5).max(0); player.set_volume(self.volume); }
             KeyCode::Char('m') => {
@@ -96,10 +77,6 @@ impl App {
                 else { self.volume = self.saved_volume.max(10); }
                 player.set_volume(self.volume);
             }
-            KeyCode::Char('s') => { self.message = player.cycle_subtitles(); }
-            KeyCode::Char('a') => { self.message = player.cycle_audio(); }
-            KeyCode::Char('n') => { self.adjacent(player, 1)?; }
-            KeyCode::Char('p') => { self.adjacent(player, -1)?; }
             KeyCode::Char('f') => self.focus_video = !self.focus_video,
             KeyCode::Char('[') => player.set_rate((player.rate() - 0.25).max(0.25)),
             KeyCode::Char(']') => player.set_rate((player.rate() + 0.25).min(4.0)),

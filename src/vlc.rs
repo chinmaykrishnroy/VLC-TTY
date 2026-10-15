@@ -3,6 +3,8 @@
 //! No VLC header/build-time linker dependency. libloading resolves the shared
 //! library at runtime. LibVLC still requires its normal codecs/plugins on disk.
 //! Video format negotiation uses RV32 with 32-byte aligned, per-picture buffers.
+//! Unlike v0.2, frames are NOT capped at 480x300. Default cap is 1920x1080;
+//! set TERMVLC_DECODE_MAX=0 for full source resolution (large allocations!).
 //! Display callbacks publish only the *latest presented* frame; no terminal
 //! writes occur on decoder threads.
 
@@ -14,22 +16,12 @@ use anyhow::{anyhow, bail, Context, Result};
 use libloading::Library;
 
 #[derive(Debug, Clone)]
-pub struct VideoFrame { pub width: usize, pub height: usize, pub pitch: usize, pub bgra: Vec<u8>, #[allow(dead_code)] pub serial: u64 }
+pub struct VideoFrame { pub width: usize, pub height: usize, pub pitch: usize, pub bgra: Vec<u8>, pub serial: u64 }
 #[derive(Default)]
 struct Size { width: usize, height: usize, pitch: usize }
 #[derive(Default)]
 struct FrameStore { size: Mutex<Size>, latest: Mutex<Option<Arc<VideoFrame>>>, presented: AtomicU64 }
-struct CallbackContext {
-    frames: Arc<FrameStore>,
-    decode_width: u32,
-}
-
-#[repr(C)]
-pub struct TrackDescription {
-    pub id: c_int,
-    pub name: *const c_char,
-    pub next: *mut TrackDescription,
-}
+struct CallbackContext { frames: Arc<FrameStore> }
 
 struct Picture {
     data: *mut u8,
@@ -51,8 +43,15 @@ unsafe extern "C" fn configure_video(opaque: *mut *mut c_void, chroma: *mut c_ch
     let ctx = &*(*opaque as *const CallbackContext);
     let in_w = (*width).max(1) as f64;
     let in_h = (*height).max(1) as f64;
-    let target_w = (ctx.decode_width as f64).clamp(64.0, 1920.0);
-    let scale = (target_w / in_w).min(1.0);
+    // The former 480x300 maximum was the dominant source of pixelation.
+    // Decode at 1080p or the original source size, whichever is smaller.
+    // Allow TERMVLC_DECODE_MAX=0 to request native dimensions (e.g. 4K).
+    let requested_max = env::var("TERMVLC_DECODE_MAX").ok()
+        .and_then(|s| s.parse::<u32>().ok()).unwrap_or(1080);
+    let scale = if requested_max == 0 { 1.0 } else {
+        (requested_max as f64 * (16.0 / 9.0) / in_w)
+            .min(requested_max as f64 / in_h).min(1.0)
+    };
     let w = ((in_w * scale).round() as u32).max(1);
     let h = ((in_h * scale).round() as u32).max(1);
     let pitch = (w * 4 + 31) & !31;
@@ -97,6 +96,7 @@ unsafe extern "C" fn display_video(opaque: *mut c_void, picture: *mut c_void) {
 // Simple C signatures from the LibVLC 3.x public ABI.
 struct Api {
     _library: Library,
+    loaded_from: PathBuf,
     new: unsafe extern "C" fn(c_int, *const *const c_char) -> *mut c_void,
     release: unsafe extern "C" fn(*mut c_void),
     media_new_path: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
@@ -117,41 +117,13 @@ struct Api {
     player_set_rate: unsafe extern "C" fn(*mut c_void, f32) -> c_int,
     video_set_callbacks: unsafe extern "C" fn(*mut c_void, Option<LockFn>, Option<UnlockFn>, Option<DisplayFn>, *mut c_void),
     video_set_format_callbacks: unsafe extern "C" fn(*mut c_void, Option<FormatFn>, Option<CleanupFn>),
-    video_get_spu: unsafe extern "C" fn(*mut c_void) -> c_int,
-    video_set_spu: unsafe extern "C" fn(*mut c_void, c_int) -> c_int,
-    video_get_spu_description: unsafe extern "C" fn(*mut c_void) -> *mut TrackDescription,
-    audio_get_track: unsafe extern "C" fn(*mut c_void) -> c_int,
-    audio_set_track: unsafe extern "C" fn(*mut c_void, c_int) -> c_int,
-    audio_get_track_description: unsafe extern "C" fn(*mut c_void) -> *mut TrackDescription,
-    track_description_list_release: unsafe extern "C" fn(*mut TrackDescription),
     errmsg: unsafe extern "C" fn() -> *const c_char,
 }
 
 impl Api {
     fn load() -> Result<Self> {
-        let mut names: Vec<PathBuf> = Vec::new();
-        if let Ok(home) = env::var("VLC_HOME") {
-            let dir = PathBuf::from(home);
-            names.push(dir.join(library_name()));
-            names.push(dir.join("lib").join(library_name()));
-        }
-        #[cfg(windows)] {
-            for var in ["ProgramFiles", "ProgramFiles(x86)"] {
-                if let Ok(base) = env::var(var) { names.push(PathBuf::from(base).join("VideoLAN").join("VLC").join(library_name())); }
-            }
-            names.push(PathBuf::from(r"C:\Program Files\VideoLAN\VLC").join(library_name()));
-            names.push(PathBuf::from(r"C:\Program Files (x86)\VideoLAN\VLC").join(library_name()));
-            names.push(PathBuf::from("libvlc.dll"));
-        }
-        #[cfg(target_os = "linux")] {
-            names.extend(["libvlc.so.5", "libvlc.so"].map(PathBuf::from));
-        }
-        #[cfg(target_os = "macos")] {
-            names.push(PathBuf::from("/Applications/VLC.app/Contents/MacOS/lib/libvlc.dylib"));
-            names.push(PathBuf::from("libvlc.dylib"));
-        }
         let mut failures = Vec::new();
-        for name in names {
+        for name in libvlc_candidates() {
             #[cfg(windows)]
             if let Some(parent) = name.parent() {
                 if parent.is_dir() {
@@ -163,18 +135,33 @@ impl Api {
                     }
                 }
             }
-            // LibVLC finds its plugins relative to its installation on most
-            // systems. Explicit VLC_HOME also permits a custom installation.
-            let library = unsafe { Library::new(&name) };
-            match library {
-                Ok(lib) => return unsafe { Self::symbols(lib) }.with_context(|| format!("incompatible LibVLC library: {}", name.display())),
+            match unsafe { Library::new(&name) } {
+                Ok(lib) => match unsafe { Self::symbols(lib, name.clone()) } {
+                    Ok(api) => return Ok(api),
+                    Err(e) => failures.push(format!("{}: incompatible library: {e:#}", name.display())),
+                },
                 Err(e) => failures.push(format!("{}: {}", name.display(), e)),
             }
         }
-        bail!("LibVLC shared library not found. Install VLC 3.x / libvlc5. Tried:\n{}", failures.join("\n"))
+        bail!("LibVLC 3.x shared library not found. Install VLC for your OS and matching CPU architecture.\nTried:\n{}", failures.join("\n"))
     }
 
-    unsafe fn symbols(lib: Library) -> Result<Self> {
+    /// LibVLC's codec and access modules live outside libvlc itself.
+    /// On Linux system packages know their plugin directories already, so avoid
+    /// globally overriding them. App bundles on macOS and installers on Windows
+    /// sometimes need a relative plugin directory explicitly provided.
+    fn configure_plugin_path(&self) {
+        if env::var_os("VLC_PLUGIN_PATH").is_some() { return; }
+        #[cfg(any(windows, target_os = "macos"))]
+        for candidate in plugin_candidates(&self.loaded_from) {
+            if candidate.is_dir() {
+                env::set_var("VLC_PLUGIN_PATH", candidate);
+                break;
+            }
+        }
+    }
+
+    unsafe fn symbols(lib: Library, loaded_from: PathBuf) -> Result<Self> {
         macro_rules! f { ($s:literal) => { *lib.get(concat!($s, "\0").as_bytes()).with_context(|| format!("missing VLC symbol {}", $s))? } }
         Ok(Self {
             new: f!("libvlc_new"), release: f!("libvlc_release"),
@@ -191,15 +178,9 @@ impl Api {
             player_set_rate: f!("libvlc_media_player_set_rate"),
             video_set_callbacks: f!("libvlc_video_set_callbacks"),
             video_set_format_callbacks: f!("libvlc_video_set_format_callbacks"),
-            video_get_spu: f!("libvlc_video_get_spu"),
-            video_set_spu: f!("libvlc_video_set_spu"),
-            video_get_spu_description: f!("libvlc_video_get_spu_description"),
-            audio_get_track: f!("libvlc_audio_get_track"),
-            audio_set_track: f!("libvlc_audio_set_track"),
-            audio_get_track_description: f!("libvlc_audio_get_track_description"),
-            track_description_list_release: f!("libvlc_track_description_list_release"),
             errmsg: f!("libvlc_errmsg"),
             _library: lib,
+            loaded_from,
         })
     }
 }
@@ -208,6 +189,70 @@ fn library_name() -> &'static str {
     #[cfg(windows)] { "libvlc.dll" }
     #[cfg(target_os = "linux")] { "libvlc.so.5" }
     #[cfg(target_os = "macos")] { "libvlc.dylib" }
+}
+
+/// Runtime loading avoids a compile-time libvlc link requirement, so native
+/// Windows, Linux and macOS builds all use the same Cargo sources.
+fn libvlc_candidates() -> Vec<PathBuf> {
+    let mut names = Vec::new();
+    if let Some(home) = env::var_os("VLC_HOME") {
+        let dir = PathBuf::from(home);
+        if dir.is_file() { names.push(dir.clone()); }
+        names.push(dir.join(library_name()));
+        names.push(dir.join("lib").join(library_name()));
+        #[cfg(target_os = "macos")]
+        {
+            names.push(dir.join("Contents/MacOS/lib/libvlc.dylib"));
+            names.push(dir.join("Contents/MacOS/libvlc.dylib"));
+            names.push(dir.join("VLC.app/Contents/MacOS/lib/libvlc.dylib"));
+        }
+    }
+    #[cfg(windows)]
+    {
+        for var in ["ProgramFiles", "ProgramFiles(x86)"] {
+            if let Some(base) = env::var_os(var) {
+                names.push(PathBuf::from(base).join("VideoLAN/VLC/libvlc.dll"));
+            }
+        }
+        names.push(PathBuf::from("libvlc.dll"));
+    }
+    #[cfg(target_os = "linux")]
+    {
+        names.extend(["libvlc.so.5", "libvlc.so"].map(PathBuf::from));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        names.extend([
+            "/Applications/VLC.app/Contents/MacOS/lib/libvlc.dylib",
+            "/Applications/VLC.app/Contents/MacOS/libvlc.dylib",
+            "/opt/homebrew/lib/libvlc.dylib",   // Apple Silicon Homebrew
+            "/usr/local/lib/libvlc.dylib",      // Intel Homebrew
+            "libvlc.dylib",
+        ].map(PathBuf::from));
+    }
+    names.dedup();
+    names
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+fn plugin_candidates(library: &Path) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(parent) = library.parent() {
+        dirs.push(parent.join("plugins"));
+        if let Some(parent2) = parent.parent() {
+            dirs.push(parent2.join("plugins"));
+        }
+    }
+    if let Some(home) = env::var_os("VLC_HOME") {
+        let dir = PathBuf::from(home);
+        dirs.push(dir.join("plugins"));
+        #[cfg(target_os = "macos")]
+        {
+            dirs.push(dir.join("Contents/MacOS/plugins"));
+            dirs.push(dir.join("Contents/plugins"));
+        }
+    }
+    dirs
 }
 
 #[derive(Clone, Debug)]
@@ -225,16 +270,13 @@ pub struct VlcPlayer {
 }
 
 impl VlcPlayer {
-    pub fn new(decode_width: u32) -> Result<Self> {
-        // VLC_HOME is mainly useful on Windows where a standard installation
-        // normally doesn't add libvlc to PATH.
-        if let Ok(home) = env::var("VLC_HOME") {
-            let plugins = Path::new(&home).join("plugins");
-            if plugins.exists() && env::var_os("VLC_PLUGIN_PATH").is_none() {
-                env::set_var("VLC_PLUGIN_PATH", plugins);
-            }
-        }
+    pub fn new() -> Result<Self> { Self::new_with_window(false) }
+
+    pub fn library_path(&self) -> &Path { &self.api.loaded_from }
+
+    pub fn new_with_window(native_window: bool) -> Result<Self> {
         let api = Api::load()?;
+        api.configure_plugin_path();
         let args = [CString::new("--quiet")?, CString::new("--no-video-title-show")?];
         let ptrs: Vec<*const c_char> = args.iter().map(|a| a.as_ptr()).collect();
         let instance = unsafe { (api.new)(ptrs.len() as c_int, ptrs.as_ptr()) };
@@ -244,13 +286,12 @@ impl VlcPlayer {
             unsafe { (api.release)(instance) };
             bail!("libvlc_media_player_new failed")
         }
-        let mut context = Box::new(CallbackContext {
-            frames: Arc::new(FrameStore::default()),
-            decode_width: decode_width.clamp(64, 1920),
-        });
-        unsafe {
-            (api.video_set_callbacks)(player, Some(lock_video), Some(unlock_video), Some(display_video), (&mut *context as *mut CallbackContext).cast());
-            (api.video_set_format_callbacks)(player, Some(configure_video), None);
+        let mut context = Box::new(CallbackContext { frames: Arc::new(FrameStore::default()) });
+        if !native_window {
+            unsafe {
+                (api.video_set_callbacks)(player, Some(lock_video), Some(unlock_video), Some(display_video), (&mut *context as *mut CallbackContext).cast());
+                (api.video_set_format_callbacks)(player, Some(configure_video), None);
+            }
         }
         Ok(Self { api, instance, player, context, rate: 1.0 })
     }
@@ -324,60 +365,6 @@ impl VlcPlayer {
             rate: self.rate, frames: self.context.frames.presented.load(Ordering::Relaxed),
         } }
     }
-
-    unsafe fn track_list(&self, get_desc: unsafe extern "C" fn(*mut c_void) -> *mut TrackDescription) -> Vec<(i32, String)> {
-        let mut out = Vec::new();
-        let head = get_desc(self.player);
-        if head.is_null() { return out; }
-        let mut curr = head;
-        for _ in 0..256 {
-            if curr.is_null() { break; }
-            let desc = &*curr;
-            let name = if desc.name.is_null() {
-                "Unknown".to_string()
-            } else {
-                CStr::from_ptr(desc.name).to_string_lossy().into_owned()
-            };
-            out.push((desc.id, name));
-            curr = desc.next;
-        }
-        (self.api.track_description_list_release)(head);
-        out
-    }
-
-    pub fn cycle_subtitles(&mut self) -> String {
-        unsafe {
-            let mut tracks = self.track_list(self.api.video_get_spu_description);
-            if !tracks.iter().any(|(id, _)| *id == -1) {
-                tracks.insert(0, (-1, "Disable".to_string()));
-            }
-            if tracks.is_empty() { return "No subtitle tracks".to_string(); }
-            let current = (self.api.video_get_spu)(self.player);
-            let current_idx = tracks.iter().position(|(id, _)| *id == current).unwrap_or(0);
-            let next_idx = (current_idx + 1) % tracks.len();
-            let (next_id, ref next_name) = tracks[next_idx];
-            (self.api.video_set_spu)(self.player, next_id);
-            if next_id == -1 {
-                "Subtitles: Off".to_string()
-            } else {
-                format!("Subtitles: [{next_id}] {next_name}")
-            }
-        }
-    }
-
-    pub fn cycle_audio(&mut self) -> String {
-        unsafe {
-            let tracks: Vec<(i32, String)> = self.track_list(self.api.audio_get_track_description)
-                .into_iter().filter(|(id, _)| *id >= 0).collect();
-            if tracks.is_empty() { return "No audio tracks".to_string(); }
-            let current = (self.api.audio_get_track)(self.player);
-            let current_idx = tracks.iter().position(|(id, _)| *id == current).unwrap_or(0);
-            let next_idx = (current_idx + 1) % tracks.len();
-            let (next_id, ref next_name) = tracks[next_idx];
-            (self.api.audio_set_track)(self.player, next_id);
-            format!("Audio: [{next_id}] {next_name}")
-        }
-    }
 }
 
 impl Drop for VlcPlayer {
@@ -390,11 +377,19 @@ impl Drop for VlcPlayer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn candidates_include_platform_shared_library() {
+        let candidates = libvlc_candidates();
+        assert!(candidates.iter().any(|p| p.to_string_lossy().contains(library_name())));
+        #[cfg(target_os = "macos")]
+        assert!(candidates.iter().any(|p| p.to_string_lossy().contains("VLC.app")));
+        #[cfg(windows)]
+        assert!(candidates.iter().any(|p| p.to_string_lossy().contains("libvlc.dll")));
+    }
     #[test] fn size_defaults_to_zero() { let x = Size::default(); assert_eq!(x.width, 0); }
     #[test] fn layout_is_32_byte_aligned() { let l = Layout::from_size_align(320 * 4 * 240, 32).unwrap(); assert_eq!(l.align(), 32); }
     #[test] fn video_callbacks_publish_an_owned_frame() {
         let store = Arc::new(FrameStore::default());
-        let mut ctx = Box::new(CallbackContext { frames: Arc::clone(&store), decode_width: 320 });
+        let mut ctx = Box::new(CallbackContext { frames: Arc::clone(&store) });
         let mut opaque: *mut c_void = (&mut *ctx as *mut CallbackContext).cast();
         let mut chroma = [0 as c_char; 4];
         let (mut w, mut h, mut pitch, mut lines) = (8_u32, 4_u32, 0_u32, 0_u32);

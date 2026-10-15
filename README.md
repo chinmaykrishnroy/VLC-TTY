@@ -1,117 +1,113 @@
-# TermVLC v0.2.0 — Rust / Ratatui / LibVLC TUI
+# TermVLC v0.4.0 — cross-platform terminal video player
 
-A terminal media player prototype: **Rust**, **Ratatui**, **Crossterm**, and **LibVLC 3.x**, with native audio and inline true-color terminal video. This is a new Rust implementation, not a merge of VLC or SparkPlayer source code.
+**Windows prioritized; Linux and macOS supported in the same Rust/Ratatui codebase.** LibVLC 3.x is loaded at runtime. The video pane attempts full-color **Kitty, Sixel, or iTerm2 pixel graphics** and automatically falls back to ANSI/Unicode half-blocks if terminal probing cannot confirm support. For conventional smooth, full-resolution playback, use `--native-window` (a **separate** LibVLC video window, not an embedded GPU window).
 
-> **Validation status:** The code is provided as a development prototype. The packaging environment did **not** contain Cargo/rustc, LibVLC, or working Git network access, so **it was not compiled or playback-tested here**. Static/source validation and the supplied sample video's integrity can be checked, but successful compilation/playback on your machine is not yet verified. Report any compile error and I can revise the source.
+**Important validation limitation:** This ZIP is a **source build candidate**. There is no Rust toolchain or LibVLC runtime in the packaging environment, so this release has not yet been compiled or smoke-tested on Windows, Linux, or macOS. The included CI workflow performs compile/tests on the three operating systems *once published to GitHub*. Passing compilation tests does not prove that native VLC playback or image protocol detection work. See `VALIDATION.md`.
 
-## Required software
+## Platform choices
 
-- Rust stable and Cargo, from https://rustup.rs/
-- LibVLC **3.x** and compatible VLC plugins (64-bit). VLC 4 APIs are different; this adapter targets 3.x.
-- A terminal supporting 24-bit color: Windows Terminal, WezTerm, Kitty, GNOME Terminal, etc.
+| OS | Suggested terminals | Pixel output | VLC installation |
+| --- | --- | --- | --- |
+| **Windows 11 (priority)** | Windows Terminal (Sixel where supported), Kitty-capable terminal, WezTerm | Sixel / Kitty / iTerm2 if detected; otherwise ANSI | 64-bit **VLC 3.x**, default `C:\Program Files\VideoLAN\VLC` |
+| **Linux** | Kitty, WezTerm, foot (Sixel), other image-capable terminals | Kitty / Sixel / iTerm2 if detected; otherwise ANSI | Distro `libvlc` runtime + VLC plugins |
+| **macOS (Intel + Apple Silicon)** | **iTerm2**, Kitty, WezTerm, Terminal.app | iTerm2 / Kitty if detected; otherwise ANSI | VLC 3.x app bundle (normally `/Applications/VLC.app`) |
 
-### Windows 10/11 (PowerShell)
+Terminal graphics support depends on the **terminal emulator**, not solely on the OS. Windows Terminal support varies by version and environment. WezTerm is often detected using iTerm2-compatible graphics rather than Kitty; trust `--graphics auto` first. Apple's built-in Terminal.app generally cannot display these pixel graphics, so ANSI mode is expected.
 
-1. Install stable Rust + Cargo via https://rustup.rs/ and restart PowerShell.
-2. Install 64-bit VLC **3.x** via https://www.videolan.org/vlc/ (the executable alone is not sufficient; the directory must include `libvlc.dll`, `libvlccore.dll`, and `plugins`).
-3. Unzip the project. In the extracted directory:
+## Windows PowerShell — first platform to test
+
+1. Install Rust (https://rustup.rs), including the Microsoft C++ Build Tools needed for the MSVC target, and the **matching-architecture VLC 3.x** desktop application (https://www.videolan.org/vlc/).
+2. Extract this ZIP. Open **PowerShell in the folder containing `Cargo.toml`**.
+3. Run:
 
 ```powershell
-cd .\termvlc_rust_v0.2.0
 $env:VLC_HOME = "C:\Program Files\VideoLAN\VLC"
+$env:PATH = "$env:VLC_HOME;$env:PATH"
 cargo build --release
-cargo run --release -- --doctor
-cargo run --release -- .\samples\sample.mp4
-# Your own video:
-cargo run --release -- "D:\Media\Video\Movies\example.mkv"
-# Browse a folder:
-cargo run --release -- "D:\Media\Video\Movies"
-# Stream URL:
-cargo run --release -- "https://example.com/video.mp4"
+cargo test
+.\target\release\termvlc.exe --doctor
+.\target\release\termvlc.exe --graphics auto ".\samples\sample.mp4"
 ```
 
-If the Windows DLL loader reports it cannot find `libvlccore.dll`, add the installation directory to your current PowerShell session:
+For your own video:
 
 ```powershell
-$env:PATH = "$env:VLC_HOME;$env:PATH"
+.\target\release\termvlc.exe --graphics auto "E:\data\Media\Anime\Ben 10 Omniverse\Season 03\Episode.mkv"
 ```
 
-### Ubuntu/Debian
+If auto falls back to ANSI despite confirmed terminal graphics support, try Sixel on a compatible Windows Terminal version:
+
+```powershell
+.\target\release\termvlc.exe --graphics sixel --fps 15 "E:\data\Media\Anime\Ben 10 Omniverse\Season 03\Episode.mkv"
+```
+
+For a native, separate video window with conventional playback quality:
+
+```powershell
+.\target\release\termvlc.exe --native-window "E:\data\Media\Anime\Ben 10 Omniverse\Season 03\Episode.mkv"
+```
+
+Or run `powershell -ExecutionPolicy Bypass -File scripts\windows-run.ps1` to build and play the sample.
+
+## Linux
+
+Install VLC and its shared library with your distribution's package manager:
 
 ```bash
-sudo apt update
-sudo apt install -y vlc libvlc5 libvlc-bin libvlc-dev pkg-config
-# Install Rust from https://rustup.rs if 'cargo' is not already installed.
+# Ubuntu / Debian
+sudo apt update && sudo apt install -y vlc libvlc5
+# Install Rust via rustup.rs if cargo is missing
 cargo build --release
-cargo run --release -- --doctor
-cargo run --release -- ./samples/sample.mp4
-cargo run --release -- "$HOME/Videos/example.mkv"
-```
-
-### macOS
-
-Install Rust from https://rustup.rs and VLC 3.x from VideoLAN. The loader looks for `/Applications/VLC.app/Contents/MacOS/lib/libvlc.dylib`. Packaging and native playback on macOS have not been verified.
-
-## Controls
-
-| Key | Action |
-| --- | --- |
-| Space | Pause/resume |
-| Left/Right (or h/l) | Seek -/+ 10 seconds |
-| s | Cycle subtitle tracks (including off) |
-| a | Cycle audio tracks |
-| n / p | Next / previous video in directory |
-| Up/Down or j/k | Select file/directory |
-| Enter | Open selected video or directory |
-| Backspace | Parent directory |
-| + / - | Volume |
-| M | Mute/unmute |
-| F | Focus video / hide library browser |
-| [ / ] | Lower/higher playback speed |
-| R | Reload directory |
-| Q/Esc | Quit |
-
-## CLI Options
-
-```bash
-cargo run --release -- [OPTIONS] [FILE|DIRECTORY|URL]
-
-Options:
-  --fps <N>           Terminal refresh limit (1 to 60, default 15)
-  --decode-width <N>  LibVLC video callback width (64 to 1920, default 480)
-  --ascii             Render in monochrome ASCII mode
-  --doctor            Check LibVLC runtime availability
-  -h, --help          Show help message
-```
-
-## Design
-
-- `src/vlc.rs` — **real LibVLC C-ABI calls loaded with libloading**. LibVLC handles audio output, decoding, playback timing, subtitles, audio tracks, and seeking. Video callback buffers are 32-byte aligned. The display callback produces an owned latest frame for the UI. Windows dynamically auto-configures PATH and plugin paths.
-- `src/renderer.rs` — Ratatui layout, browser, transport gauge and video in the content panel. Supports ANSI TrueColor (`▀`) and monochrome ASCII rendering.
-- `src/app.rs` — keyboard, directory browsing, track cycling, and playback commands.
-- `src/main.rs` — CLI parser, terminal lifecycle, event loop, and initialization.
-- `samples/sample.mp4` — actual 8-second H.264/AAC test clip.
-
-## Important limitations
-
-This is a terminal media player targeting **Ratatui**.
-
-- ANSI TrueColor rendering, not Kitty/Sixel image graphics. FPS can be tuned via `--fps` and resolution via `--decode-width`.
-- No playlist saving, disc menus, media database, hardware rendering, or equalizer.
-- URL playback is accepted as a command-line argument; browsing is limited to local files.
-- Test with **VLC 3.x**. Versions must match 64-bit Rust/64-bit VLC.
-
-## Test locally
-
-```bash
-cargo fmt --check
 cargo test
-cargo run -- --doctor
-cargo run -- ./samples/sample.mp4
+./target/release/termvlc --doctor
+./target/release/termvlc --graphics auto ./samples/sample.mp4
 ```
 
-Verify that you see changing colors (not just the startup screen), hear the sample's tone, can pause/resume and seek, and the terminal is restored after quitting. If an error occurs, save the terminal output.
+Fedora/Arch package names differ. For a library in a nonstandard installation prefix, set `VLC_HOME=/your/prefix`. For local playback replace the sample path. `bash scripts/linux-run.sh "/path/to/video.mkv"` builds, tests, and launches in one command.
 
-## License and upstream references
+**Linux over SSH:** image support and audio behavior depend on the *local* terminal emulator and how audio is routed. Remote LibVLC audio will ordinarily play on the remote host, not automatically on your computer.
 
-This original code is MIT-licensed (see `LICENSE`); it does not contain copied SparkPlayer or VLC source. For upstream examples/ideas, see `UPSTREAM.md`. LibVLC and its plugins have their own LGPL/GPL licensing and redistribution rules.
+## macOS — Intel and Apple Silicon
+
+Install [VLC 3.x for macOS](https://www.videolan.org/vlc/download-macosx.html) and Rust via [rustup](https://rustup.rs/). Open **iTerm2** or Kitty for the best chance of real pixel graphics:
+
+```bash
+export VLC_HOME="/Applications/VLC.app"
+cargo build --release
+cargo test
+./target/release/termvlc --doctor
+./target/release/termvlc --graphics auto ./samples/sample.mp4
+```
+
+Alternatively: `bash scripts/macos-run.sh "/Users/me/Movies/movie.mkv"`.
+
+TermVLC checks the VLC.app LibVLC bundle and common Homebrew prefixes (`/opt/homebrew` for Apple Silicon, `/usr/local` for Intel). If `--doctor` reports that the library cannot be loaded, confirm VLC.app is installed and try setting `VLC_HOME` to the app bundle or your lib directory. Homebrew's `vlc` cask and formula availability may differ, so the official VLC.app is the recommended starting point.
+
+## Rendering modes and controls
+
+```text
+--graphics auto      Query terminal graphics, fall back to ANSI if unsupported (default)
+--graphics kitty     Force Kitty image protocol; needs terminal support
+--graphics sixel     Force Sixel raster graphics; needs terminal support
+--graphics iterm2    Force iTerm2 OSC 1337 graphics; needs terminal support
+--graphics ansi      Unicode half-block fallback
+--fps 24             Cap graphics conversion requests, 1–60
+--native-window      Use LibVLC's separate native video window
+--doctor             Print LibVLC loading results and detected library path
+```
+
+Controls: `Space` play/pause, `←/→` seek 10s, `↑/↓` browse files, `Enter` play/open, `Backspace` parent directory, `+/-` volume, `m` mute, `[` and `]` playback rate, `f` focus video, `g` switch between pixel graphics and ANSI, `q` quit.
+
+**Quality caveat:** The decoded source is capped to 1080p by default to avoid excessive frame conversion. Use `TERMVLC_DECODE_MAX=0` to request original dimensions (high RAM/CPU usage); terminal presentation still scales to its available pixel area and cannot promise 1080p/60 output. `--native-window` is still the best option for normal video-player quality.
+
+## How it is structured
+
+- `src/vlc.rs`: LibVLC 3.x FFI loader, OS-specific search paths, video callback, audio/playback control.
+- `src/graphics.rs`: Kitty/Sixel/iTerm2 probing, conversion worker, fallback.
+- `src/renderer.rs`: Ratatui panes, video and status controls.
+- `src/app.rs`: file browser and keyboard interactions.
+- `src/main.rs`: CLI and lifecycle; built from the same source tree for all three OSes.
+- `.github/workflows/rust.yml`: Windows, Ubuntu and macOS compile/tests when pushed to GitHub.
+- `scripts/windows-run.ps1`, `scripts/linux-run.sh`, `scripts/macos-run.sh`: OS launch guides.
+
+This is a standalone implementation inspired by upstream architecture, **not a copy** of VLC or SparkPlayer source. See `UPSTREAM.md` for links and licensing notes.
