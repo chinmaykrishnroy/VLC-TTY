@@ -91,6 +91,20 @@ impl Drop for TerminalGuard {
 }
 
 fn main() -> Result<()> {
+    // Windows default thread stack is only 1 MB, which can overflow when large terminal
+    // UI trees, LibVLC callbacks, and image encoding pipelines interact.
+    // Run the main UI loop on an 8 MB stack thread for rock-solid stability.
+    let builder = std::thread::Builder::new()
+        .name("termvlc-main".into())
+        .stack_size(8 * 1024 * 1024);
+    let handler = builder.spawn(run)?;
+    match handler.join() {
+        Ok(res) => res,
+        Err(e) => std::panic::resume_unwind(e),
+    }
+}
+
+fn run() -> Result<()> {
     let opts = options()?;
     if opts.doctor {
         println!("TermVLC diagnostics\nOS: {}\nVLC_HOME: {}\nRendering request: {:?}",

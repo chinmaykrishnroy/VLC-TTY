@@ -2297,6 +2297,7 @@ name = "termvlc"
 version = "0.4.0"
 dependencies = [
  "anyhow",
+ "icy_sixel",
  "image",
  "libloading",
  "ratatui",

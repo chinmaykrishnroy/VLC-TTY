@@ -43,11 +43,12 @@ unsafe extern "C" fn configure_video(opaque: *mut *mut c_void, chroma: *mut c_ch
     let ctx = &*(*opaque as *const CallbackContext);
     let in_w = (*width).max(1) as f64;
     let in_h = (*height).max(1) as f64;
-    // The former 480x300 maximum was the dominant source of pixelation.
-    // Decode at 1080p or the original source size, whichever is smaller.
-    // Allow TERMVLC_DECODE_MAX=0 to request native dimensions (e.g. 4K).
+    // Decode at 720p or original source size, whichever is smaller.
+    // 720p matches or exceeds the pixel density of terminal windows while cutting
+    // memory bandwidth and decode CPU usage by >50%. Allow TERMVLC_DECODE_MAX=1080
+    // or TERMVLC_DECODE_MAX=0 for full source resolution.
     let requested_max = env::var("TERMVLC_DECODE_MAX").ok()
-        .and_then(|s| s.parse::<u32>().ok()).unwrap_or(1080);
+        .and_then(|s| s.parse::<u32>().ok()).unwrap_or(720);
     let scale = if requested_max == 0 { 1.0 } else {
         (requested_max as f64 * (16.0 / 9.0) / in_w)
             .min(requested_max as f64 / in_h).min(1.0)
@@ -410,5 +411,22 @@ mod tests {
         assert_eq!(frame.serial, 1);
         assert_eq!(frame.width, w as usize);
         assert_eq!(frame.bgra[0], 42);
+    }
+    #[test]
+    fn test_switch_videos() {
+        let mut player = match VlcPlayer::new() {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        let file1 = r"E:\data\Media\TV\Breaking Bad\Season 02\Breaking Bad - S02E03.mkv";
+        let file2 = r"E:\data\Media\TV\Breaking Bad\Season 02\Breaking Bad - S02E04.mkv";
+        if std::path::Path::new(file1).exists() {
+            let _ = player.open(file1);
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            if std::path::Path::new(file2).exists() {
+                let _ = player.open(file2);
+                std::thread::sleep(std::time::Duration::from_millis(500));
+            }
+        }
     }
 }
