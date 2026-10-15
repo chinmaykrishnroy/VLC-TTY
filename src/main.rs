@@ -104,6 +104,26 @@ fn main() -> Result<()> {
     }
 }
 
+fn drain_key_burst(first: char) -> Result<String> {
+    let mut s = String::new();
+    s.push(first);
+    // ConPTY / Windows Terminal injects dropped Explorer files as rapid KeyPress bursts.
+    // Drain all immediately queued characters (< 20ms) into a complete path string.
+    while event::poll(Duration::from_millis(20))? {
+        match event::read()? {
+            Event::Key(k) if k.kind == KeyEventKind::Press => {
+                match k.code {
+                    KeyCode::Char(c) => s.push(c),
+                    KeyCode::Enter => break,
+                    _ => break,
+                }
+            }
+            _ => break,
+        }
+    }
+    Ok(s)
+}
+
 fn run() -> Result<()> {
     let opts=options()?;
     if opts.doctor {
@@ -144,6 +164,26 @@ fn run() -> Result<()> {
             match event::read()? {
                 Event::Key(key) if key.kind==KeyEventKind::Press => {
                     if key.code==KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL){break;}
+                    if let KeyCode::Char(c) = key.code {
+                        if app.input.is_none() && !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) {
+                            if event::poll(Duration::from_millis(0))? {
+                                let burst = drain_key_burst(c)?;
+                                if burst.chars().count() > 1 {
+                                    let first_ch = burst.chars().next().unwrap();
+                                    let is_repeat = burst.chars().all(|ch| ch == first_ch);
+                                    if !is_repeat {
+                                        let _ = app.handle_drop_or_paste(&burst, &mut player);
+                                        continue;
+                                    } else {
+                                        for _ in 0..burst.len() {
+                                            if !app.handle_key(key, &mut player)? { return Ok(()); }
+                                        }
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     if key.code==KeyCode::Char('g') && app.input.is_none() && app.overlay==app::Overlay::None {
                         graphics.toggle_ansi();
                         app.notify(format!("Video renderer: {}",graphics.label()));

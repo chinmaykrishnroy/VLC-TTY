@@ -5,7 +5,10 @@ use ratatui::{layout::Rect, crossterm::event::{KeyCode, KeyEvent, KeyModifiers, 
 use crate::{subtitles::SubtitleFile, vlc::VlcPlayer};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Pane { Browser, Video }
+pub enum ViewMode {
+    Player,
+    Playlist,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Overlay { None, Help, Info, SubtitleTracks, AudioTracks }
@@ -97,7 +100,7 @@ impl MenuKind {
                 "Media Information          I",
             ],
             Self::View => &[
-                "Toggle Browser / Player    Tab",
+                "Toggle Playlist / Player   Tab",
                 "Refresh Library Files      R",
             ],
             Self::Help => &[
@@ -113,9 +116,14 @@ pub struct HitZones {
     pub back: Option<Rect>,
     pub fullscreen: Option<Rect>,
     pub play: Option<Rect>,
+    pub stop: Option<Rect>,
+    pub prev: Option<Rect>,
+    pub next: Option<Rect>,
+    pub playlist_toggle: Option<Rect>,
     pub timeline: Option<Rect>,
     pub subtitles: Option<Rect>,
     pub audio: Option<Rect>,
+    pub volume: Option<Rect>,
     pub browser: Option<(Rect, usize)>,
     pub track_list: Option<(Rect, usize)>,
     pub menu_bar: Vec<(Rect, MenuKind)>,
@@ -141,7 +149,7 @@ pub struct App {
     pub status: String,
     pub status_at: Instant,
     pub fullscreen: bool,
-    pub pane: Pane,
+    pub view_mode: ViewMode,
     pub overlay: Overlay,
     pub input: Option<InputDialog>,
     pub tracks: Vec<TrackOption>,
@@ -170,10 +178,13 @@ impl App {
         let resolved = path.unwrap_or_else(|| Path::new("."));
         let cwd = if resolved.is_dir() { resolved.to_path_buf() }
             else { resolved.parent().unwrap_or_else(|| Path::new(".")).to_path_buf() };
+        let is_dir_arg = path.is_some_and(|p| p.is_dir());
         let mut app = Self {
             cwd, entries: vec![], selected: 0, current: None,
             status: "VLC media player ready. Drag and drop media or press Ctrl+O to open.".into(),
-            status_at: Instant::now(), fullscreen: false, pane: Pane::Browser,
+            status_at: Instant::now(), fullscreen: false,
+            // Default to Player view (exact VLC home page / video view) unless launched on a directory
+            view_mode: if is_dir_arg { ViewMode::Playlist } else { ViewMode::Player },
             overlay: Overlay::None, input: None, tracks: vec![], track_selected: 0,
             volume: 100, saved_volume: 100, sidecar: None, sidecar_enabled: false,
             subtitle_delay_ms: 0, selected_subtitle: "Off".into(),
@@ -205,6 +216,7 @@ impl App {
     pub fn open_media(&mut self, source: &str, player: &mut VlcPlayer) -> Result<()> {
         player.open(source)?;
         self.current = Some(source.to_owned());
+        self.view_mode = ViewMode::Player; // Immediately switch to player view like VLC desktop
         self.overlay = Overlay::None;
         self.active_menu = None;
         self.sidecar = if source.contains("://") { None } else { SubtitleFile::discover(Path::new(source)) };
@@ -350,7 +362,7 @@ impl App {
         match dialog.purpose {
             InputPurpose::Media => {
                 let p = Path::new(value);
-                if p.is_dir() { self.cwd = p.to_path_buf(); self.selected = 0; self.refresh(); }
+                if p.is_dir() { self.cwd = p.to_path_buf(); self.selected = 0; self.refresh(); self.view_mode = ViewMode::Playlist; }
                 else if let Err(e) = self.open_media(value, player) { self.notify(format!("Open error: {e:#}")); }
             }
             InputPurpose::Subtitle => {
@@ -375,6 +387,7 @@ impl App {
             self.cwd = path.to_path_buf();
             self.selected = 0;
             self.refresh();
+            self.view_mode = ViewMode::Playlist;
             self.notify(format!("📂 Switched to: {}", path.display()));
         } else if is_subtitle_path(path) {
             self.load_subtitle(path, player)?;
@@ -439,7 +452,7 @@ impl App {
             (MenuKind::Tools, 0) => self.overlay = Overlay::Info,
 
             // View
-            (MenuKind::View, 0) => self.pane = if self.pane == Pane::Browser { Pane::Video } else { Pane::Browser },
+            (MenuKind::View, 0) => self.view_mode = if self.view_mode == ViewMode::Player { ViewMode::Playlist } else { ViewMode::Player },
             (MenuKind::View, 1) => self.refresh(),
 
             // Help
@@ -543,12 +556,16 @@ impl App {
             KeyCode::Char('.') => { self.subtitle_delay_ms += 100; self.notify(format!("Subtitle delay: {} ms", self.subtitle_delay_ms)); },
             KeyCode::Char('n') => self.adjacent(player, 1),
             KeyCode::Char('p') => self.adjacent(player, -1),
-            KeyCode::Tab => self.pane = if self.pane == Pane::Browser { Pane::Video } else { Pane::Browser },
-            KeyCode::Up | KeyCode::Char('k') if !self.fullscreen => self.selected = self.selected.saturating_sub(1),
-            KeyCode::Down | KeyCode::Char('j') if !self.fullscreen => self.selected = (self.selected + 1).min(self.entries.len().saturating_sub(1)),
+            KeyCode::Tab => self.view_mode = if self.view_mode == ViewMode::Player { ViewMode::Playlist } else { ViewMode::Player },
+            KeyCode::Up | KeyCode::Char('k') if self.view_mode == ViewMode::Playlist && !self.fullscreen => {
+                self.selected = self.selected.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') if self.view_mode == ViewMode::Playlist && !self.fullscreen => {
+                self.selected = (self.selected + 1).min(self.entries.len().saturating_sub(1));
+            }
             KeyCode::Backspace if self.fullscreen => self.toggle_fullscreen(),
-            KeyCode::Backspace => self.parent(),
-            KeyCode::Enter if !self.fullscreen => self.enter(player)?,
+            KeyCode::Backspace if self.view_mode == ViewMode::Playlist => self.parent(),
+            KeyCode::Enter if self.view_mode == ViewMode::Playlist && !self.fullscreen => self.enter(player)?,
             KeyCode::Char('r') => self.refresh(),
             _ => {}
         }
@@ -559,26 +576,10 @@ impl App {
         let (x, y) = (evt.column, evt.row);
         if self.input.is_some() { return Ok(()); }
 
-        // Click inside open dropdown menu
-        if let Some((_, ref items)) = zones.menu_dropdown {
-            if matches!(evt.kind, MouseEventKind::Down(MouseButton::Left)) {
-                if let Some(menu) = self.active_menu {
-                    for (item_rect, idx) in items {
-                        if hit(Some(*item_rect), x, y) {
-                            let _ = self.trigger_menu_action(menu, *idx, player);
-                            return Ok(());
-                        }
-                    }
-                }
-                self.active_menu = None;
-                return Ok(());
-            }
-        }
-
-        // Click on menu bar
-        if !self.fullscreen {
+        // 1. Click on menu bar headers (Media, Playback, Audio, Video, Subtitle, Tools, View, Help)
+        if !self.fullscreen && matches!(evt.kind, MouseEventKind::Down(MouseButton::Left)) {
             for (rect, menu) in &zones.menu_bar {
-                if hit(Some(*rect), x, y) && matches!(evt.kind, MouseEventKind::Down(MouseButton::Left)) {
+                if hit(Some(*rect), x, y) {
                     if self.active_menu == Some(*menu) {
                         self.active_menu = None;
                     } else {
@@ -588,6 +589,29 @@ impl App {
                     return Ok(());
                 }
             }
+        }
+
+        // 2. Click inside open dropdown menu
+        if let Some((_, ref items)) = zones.menu_dropdown {
+            if matches!(evt.kind, MouseEventKind::Down(MouseButton::Left)) {
+                if let Some(menu) = self.active_menu {
+                    for (item_rect, idx) in items {
+                        if hit(Some(*item_rect), x, y) {
+                            let _ = self.trigger_menu_action(menu, *idx, player);
+                            self.active_menu = None;
+                            return Ok(());
+                        }
+                    }
+                }
+                self.active_menu = None;
+                return Ok(());
+            }
+        }
+
+        // Close menu if clicked anywhere else
+        if self.active_menu.is_some() && matches!(evt.kind, MouseEventKind::Down(MouseButton::Left)) {
+            self.active_menu = None;
+            return Ok(());
         }
 
         if self.overlay == Overlay::SubtitleTracks || self.overlay == Overlay::AudioTracks {
@@ -615,8 +639,21 @@ impl App {
                 if self.fullscreen && hit(zones.back, x, y) { self.toggle_fullscreen(); }
                 else if hit(zones.fullscreen, x, y) { self.toggle_fullscreen(); }
                 else if hit(zones.play, x, y) { player.toggle_pause(); self.last_osd = Instant::now(); }
+                else if hit(zones.stop, x, y) { player.stop(); self.notify("■ Stopped"); }
+                else if hit(zones.prev, x, y) { self.adjacent(player, -1); }
+                else if hit(zones.next, x, y) { self.adjacent(player, 1); }
+                else if hit(zones.playlist_toggle, x, y) {
+                    self.view_mode = if self.view_mode == ViewMode::Player { ViewMode::Playlist } else { ViewMode::Player };
+                }
                 else if hit(zones.subtitles, x, y) { self.open_tracks(Overlay::SubtitleTracks, player); }
                 else if hit(zones.audio, x, y) { self.open_tracks(Overlay::AudioTracks, player); }
+                else if let Some(vol_rect) = zones.volume.filter(|r| hit(Some(*r), x, y)) {
+                    let frac = (f64::from(x.saturating_sub(vol_rect.x)) / f64::from(vol_rect.width.max(1))).clamp(0.0, 1.0);
+                    let new_vol = (frac * 125.0).round() as i32;
+                    self.volume = new_vol;
+                    player.set_volume(new_vol);
+                    self.notify(format!("🔊 Volume: {new_vol}%"));
+                }
                 else if let Some(progress) = zones.timeline.filter(|r| hit(Some(*r), x, y)) {
                     let snap = player.snapshot();
                     if snap.length_ms > 0 {
@@ -630,7 +667,6 @@ impl App {
                     let double = self.last_file_click.is_some_and(|(at, prev)| prev == index && at.elapsed() < Duration::from_millis(450));
                     self.last_file_click = Some((Instant::now(), index));
                     self.selected = index;
-                    self.pane = Pane::Browser;
                     if double { self.enter(player)?; self.last_file_click = None; }
                 } else if self.fullscreen { player.toggle_pause(); self.last_osd = Instant::now(); }
             }
@@ -641,10 +677,29 @@ impl App {
                         let fraction = f64::from(x.saturating_sub(rect.x)) / f64::from(rect.width.max(1));
                         player.seek_to((fraction * snap.length_ms as f64) as i64);
                     }
+                } else if let Some(vol_rect) = zones.volume.filter(|r| hit(Some(*r), x, y)) {
+                    let frac = (f64::from(x.saturating_sub(vol_rect.x)) / f64::from(vol_rect.width.max(1))).clamp(0.0, 1.0);
+                    let new_vol = (frac * 125.0).round() as i32;
+                    self.volume = new_vol;
+                    player.set_volume(new_vol);
                 }
             }
-            MouseEventKind::ScrollDown if !self.fullscreen => self.selected = (self.selected + 3).min(self.entries.len().saturating_sub(1)),
-            MouseEventKind::ScrollUp if !self.fullscreen => self.selected = self.selected.saturating_sub(3),
+            MouseEventKind::ScrollDown if self.view_mode == ViewMode::Playlist && !self.fullscreen => {
+                self.selected = (self.selected + 3).min(self.entries.len().saturating_sub(1));
+            }
+            MouseEventKind::ScrollUp if self.view_mode == ViewMode::Playlist && !self.fullscreen => {
+                self.selected = self.selected.saturating_sub(3);
+            }
+            MouseEventKind::ScrollUp => {
+                self.volume = (self.volume + 5).min(125);
+                player.set_volume(self.volume);
+                self.notify(format!("🔊 Volume: {}%", self.volume));
+            }
+            MouseEventKind::ScrollDown => {
+                self.volume = self.volume.saturating_sub(5);
+                player.set_volume(self.volume);
+                self.notify(format!("🔊 Volume: {}%", self.volume));
+            }
             _ => {}
         }
         Ok(())
