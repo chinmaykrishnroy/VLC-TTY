@@ -431,25 +431,14 @@ pub fn draw(
     let has_active_popup = app.active_menu.is_some() || app.overlay != Overlay::None || app.input.is_some();
 
     if app.fullscreen {
-        // ── Fullscreen: Clean edge-to-edge layout with zero leftover text ────
+        // ── Fullscreen: 100% Edge-to-edge pure video without persistent text bars ──
         f.render_widget(Block::default().style(Style::default().bg(Color::Black)), screen);
-        let show_osd = app.show_osd() || info.state == 3 || info.state == 4;
-        let osd_h = if show_osd { 1 } else { 0 };
 
-        // Top bar (height 1): Back button + Current Media Name (Text only - NO emojis)
-        let top_bar = Rect::new(screen.x, screen.y, screen.width, 1);
-        let media_name = app.current.as_deref().unwrap_or("VLC media player");
-        let top_title = format!(" [ Back (Esc) ]  Playing: {} ", short(media_name.rsplit(['/', '\\']).next().unwrap_or(media_name), screen.width.saturating_sub(24) as usize));
-        f.render_widget(Paragraph::new(top_title).style(Style::default().bg(Color::Black).fg(ORANGE).add_modifier(Modifier::BOLD)), top_bar);
+        // Entire terminal is dedicated to video playback (zero rows stolen)
+        let video_area = screen;
+        zones.video = Some(video_area);
+        // Back zone at top-left allows clicking to exit fullscreen
         zones.back = Some(Rect::new(screen.x, screen.y, 16.min(screen.width), 1));
-
-        // Video area: strictly between row 1 and (bottom - osd_h)
-        let video_area = Rect::new(
-            screen.x,
-            screen.y + 1,
-            screen.width,
-            screen.height.saturating_sub(1 + osd_h),
-        );
 
         if image.is_some() && !native_window {
             let picture_area = if app.sidecar_enabled && !graphics.is_ansi() {
@@ -464,13 +453,30 @@ pub fn draw(
         }
         subtitle(f, app, info, video_area);
 
-        // Bottom OSD bar (height 1):
-        if show_osd {
-            let label = format!(" {}   {} / {}   Vol {}%   {:.2}x ",
-                state_label(info.state), time(info.time_ms), time(info.length_ms), info.volume, info.rate);
-            let row = Rect::new(screen.x, screen.bottom().saturating_sub(1), screen.width, 1);
-            f.render_widget(Paragraph::new(short(&label, row.width as usize))
-                .style(Style::default().fg(PALE).bg(Color::Black)), row);
+        // Floating OSD: only renders momentarily when user performs an action (e.g. presses 't', volume, seek)
+        // Floats unobtrusively in top-right corner over the video and auto-disappears after 2 seconds.
+        if app.show_osd() {
+            let label = if app.status_visible() {
+                format!(" {} ", app.status)
+            } else {
+                format!(" {}   {} / {}   Vol {}%   {:.2}x ",
+                    state_label(info.state), time(info.time_ms), time(info.length_ms), info.volume, info.rate)
+            };
+            let width = (label.chars().count() as u16 + 2).min(screen.width.saturating_sub(2));
+            if width > 0 {
+                let osd_rect = Rect::new(
+                    screen.right().saturating_sub(width + 1),
+                    screen.y + 1,
+                    width,
+                    1,
+                );
+                f.render_widget(Clear, osd_rect);
+                f.render_widget(
+                    Paragraph::new(label)
+                        .style(Style::default().fg(Color::White).bg(Color::Rgb(20, 23, 28)).add_modifier(Modifier::BOLD)),
+                    osd_rect,
+                );
+            }
         }
     } else {
         // ── Windowed layout: VLC Desktop Layout ───────────────────────────────
@@ -501,6 +507,7 @@ pub fn draw(
                 columns[1]
             }
         };
+        zones.video = Some(video_area);
 
         if image.is_some() && !native_window {
             let picture_area = if app.sidecar_enabled && !graphics.is_ansi() {

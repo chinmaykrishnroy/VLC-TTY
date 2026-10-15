@@ -120,6 +120,7 @@ impl MenuKind {
 pub struct HitZones {
     pub back: Option<Rect>,
     pub fullscreen: Option<Rect>,
+    pub video: Option<Rect>,
     pub play: Option<Rect>,
     pub stop: Option<Rect>,
     pub prev: Option<Rect>,
@@ -170,6 +171,7 @@ pub struct App {
     pub selected_audio: String,
     pub last_osd: Instant,
     pub last_file_click: Option<(Instant, usize)>,
+    pub last_video_click: Option<Instant>,
     pub active_menu: Option<MenuKind>,
     pub menu_selected: usize,
 }
@@ -195,7 +197,8 @@ impl App {
             overlay: Overlay::None, input: None, tracks: vec![], track_selected: 0,
             volume: 100, saved_volume: 100, sidecar: None, sidecar_enabled: false,
             subtitle_delay_ms: 0, audio_delay_ms: 0, selected_subtitle: "Off".into(),
-            selected_audio: "Default".into(), last_osd: Instant::now(), last_file_click: None,
+            selected_audio: "Default".into(), last_osd: Instant::now() - Duration::from_secs(10), last_file_click: None,
+            last_video_click: None,
             active_menu: None, menu_selected: 0,
         };
         app.refresh();
@@ -211,13 +214,14 @@ impl App {
         self.status_at = Instant::now();
         self.last_osd = Instant::now();
     }
-    pub fn status_visible(&self) -> bool { self.status_at.elapsed() < Duration::from_secs(5) }
-    pub fn show_osd(&self) -> bool { self.last_osd.elapsed() < Duration::from_secs(4) }
+    pub fn status_visible(&self) -> bool { self.status_at.elapsed() < Duration::from_secs(4) }
+    pub fn show_osd(&self) -> bool { self.last_osd.elapsed() < Duration::from_secs(2) }
     pub fn toggle_fullscreen(&mut self) {
         self.fullscreen = !self.fullscreen;
         self.overlay = Overlay::None;
         self.active_menu = None;
-        self.last_osd = Instant::now();
+        // Start fullscreen completely clean without forced OSD
+        self.last_osd = Instant::now() - Duration::from_secs(10);
     }
 
     pub fn open_media(&mut self, source: &str, player: &mut VlcPlayer) -> Result<()> {
@@ -241,7 +245,7 @@ impl App {
         self.selected_subtitle = if let Some(ref sidecar) = self.sidecar {
             sidecar.path.file_name().unwrap_or_default().to_string_lossy().to_string()
         } else { "VLC default".to_string() };
-        self.notify(format!("▶ {}", source.rsplit(['/', '\\']).next().unwrap_or(source)));
+        self.notify(format!("[Play] {}", source.rsplit(['/', '\\']).next().unwrap_or(source)));
         Ok(())
     }
 
@@ -822,7 +826,18 @@ impl App {
                     self.last_file_click = Some((Instant::now(), index));
                     self.selected = index;
                     if double { self.enter(player)?; self.last_file_click = None; }
-                } else if self.fullscreen { player.toggle_pause(); self.last_osd = Instant::now(); }
+                } else if hit(zones.video, x, y) || self.fullscreen {
+                    let now = Instant::now();
+                    let is_double = self.last_video_click.is_some_and(|at| at.elapsed() < Duration::from_millis(400));
+                    self.last_video_click = Some(now);
+                    if is_double {
+                        self.toggle_fullscreen();
+                        self.last_video_click = None;
+                    } else {
+                        player.toggle_pause();
+                        self.last_osd = Instant::now();
+                    }
+                }
             }
             MouseEventKind::Drag(MouseButton::Left) => {
                 if let Some(rect) = zones.timeline.filter(|r| hit(Some(*r), x, y)) {

@@ -13,6 +13,7 @@ use ratatui::{
         cursor,
         event::{self,Event,KeyCode,KeyEventKind,KeyModifiers,EnableBracketedPaste,DisableBracketedPaste},
         execute,
+        style,
         terminal::{disable_raw_mode,enable_raw_mode,EnterAlternateScreen,LeaveAlternateScreen,
             BeginSynchronizedUpdate,EndSynchronizedUpdate},
     },
@@ -84,6 +85,7 @@ impl TerminalGuard {
 }
 impl Drop for TerminalGuard {
     fn drop(&mut self){
+        let _=execute!(io::stdout(),style::Print("\x1b[10;2t"));
         let _=disable_raw_mode();
         let _=execute!(io::stdout(),event::DisableMouseCapture,DisableBracketedPaste,
             cursor::Show,LeaveAlternateScreen);
@@ -197,6 +199,10 @@ fn run() -> Result<()> {
             }
         }
         if previous_fullscreen != app.fullscreen || previous_media != app.current {
+            if previous_fullscreen != app.fullscreen {
+                let seq = if app.fullscreen { "\x1b[10;1t" } else { "\x1b[10;2t" };
+                let _ = execute!(io::stdout(), style::Print(seq));
+            }
             terminal.clear()?;
             graphics.invalidate();
             previous_fullscreen = app.fullscreen;
