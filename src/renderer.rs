@@ -1,6 +1,7 @@
 //! VLC media player — authentic desktop interface in TUI.
 //! Implements VLC Desktop layout: top menu bar, full-width player/welcome canvas,
 //! timeline slider, VLC controls toolbar with clean text buttons, and non-overlapping overlays.
+use std::sync::OnceLock;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Margin, Rect},
@@ -14,10 +15,10 @@ use crate::{
     vlc::{PlaybackSnapshot, VideoFrame},
 };
 
+const VLC_CONE_PNG: &[u8] = include_bytes!("../assets/vlc_cone.png");
+static VLC_CONE_IMAGE: OnceLock<Option<image::RgbaImage>> = OnceLock::new();
+
 const ORANGE:       Color = Color::Rgb(255, 120,   0); // VLC safety orange
-const ORANGE_DARK:  Color = Color::Rgb(210,  80,   0); // VLC cone base dark orange
-const WHITE_BAND:   Color = Color::Rgb(245, 248, 252); // Reflective silver-white band
-const BASE_GREY:    Color = Color::Rgb( 45,  48,  54); // Base shadow / border
 const CYAN:         Color = Color::Rgb( 74, 203, 216);
 const PALE:         Color = Color::Rgb(225, 234, 241);
 const DIM:          Color = Color::Rgb(115, 131, 150);
@@ -103,35 +104,67 @@ fn centered(outer: Rect, width: u16, height: u16) -> Rect {
 }
 
 // ──────────────────────────────────────────────────────────────────────
-//  VLC Traffic Cone — Authentic High-Fidelity ANSI/Unicode Block Art
+//  VLC Traffic Cone — Official High-Fidelity 3D Cone with TrueColor half-blocks
 // ──────────────────────────────────────────────────────────────────────
+fn blend_pixel(rgba: [u8; 4], bg: (u8, u8, u8)) -> (u8, u8, u8) {
+    let a = rgba[3] as f32 / 255.0;
+    (
+        (rgba[0] as f32 * a + bg.0 as f32 * (1.0 - a)).round() as u8,
+        (rgba[1] as f32 * a + bg.1 as f32 * (1.0 - a)).round() as u8,
+        (rgba[2] as f32 * a + bg.2 as f32 * (1.0 - a)).round() as u8,
+    )
+}
+
 fn vlc_cone_logo(f: &mut Frame, area: Rect) {
-    if area.width < 28 || area.height < 13 { return; }
+    if area.width < 12 || area.height < 4 { return; }
+    let Some(cone) = VLC_CONE_IMAGE.get_or_init(|| {
+        image::load_from_memory(VLC_CONE_PNG).ok().map(|img| img.to_rgba8())
+    }).as_ref() else { return; };
 
-    let bold = Modifier::BOLD;
-    let st_o = Style::default().fg(ORANGE).add_modifier(bold);
-    let st_w = Style::default().fg(WHITE_BAND).add_modifier(bold);
-    let st_d = Style::default().fg(ORANGE_DARK).add_modifier(bold);
-    let st_b = Style::default().fg(BASE_GREY);
+    let (img_w, img_h) = (cone.width() as usize, cone.height() as usize);
+    if img_w == 0 || img_h == 0 { return; }
 
-    let rows: Vec<Line> = vec![
-        Line::from(vec![Span::raw("           "), Span::styled("▄██▄", st_o)]),
-        Line::from(vec![Span::raw("          "), Span::styled("██████", st_o)]),
-        Line::from(vec![Span::raw("         "), Span::styled("▄██████▄", st_o)]),
-        Line::from(vec![Span::raw("        "), Span::styled("██████████", st_o)]),
-        Line::from(vec![Span::raw("       "), Span::styled("████████████", st_w)]),   // Upper reflective band
-        Line::from(vec![Span::raw("      "), Span::styled("██████████████", st_w)]),   // Upper reflective band
-        Line::from(vec![Span::raw("     "), Span::styled("████████████████", st_o)]),
-        Line::from(vec![Span::raw("    "), Span::styled("██████████████████", st_o)]),
-        Line::from(vec![Span::raw("   "), Span::styled("████████████████████", st_w)]), // Lower reflective band
-        Line::from(vec![Span::raw("  "), Span::styled("██████████████████████", st_w)]), // Lower reflective band
-        Line::from(vec![Span::raw(" "), Span::styled("████████████████████████", st_o)]),
-        Line::from(vec![Span::styled("▄██████████████████████████▄", st_d)]),             // Base plate
-        Line::from(vec![Span::styled("▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀", st_b)]),             // Base shadow
-    ];
+    // 1 terminal row has 2 half-blocks vertically. To maintain authentic 1:1 square aspect ratio:
+    // cone_w (columns) = cone_h (rows) * 2.
+    let max_h = area.height.min(16).max(4);
+    let mut cone_h = max_h;
+    let mut cone_w = cone_h * 2;
+    if cone_w > area.width {
+        cone_w = area.width;
+        cone_h = (cone_w / 2).max(2);
+    }
 
-    let dest = centered(area, 28, rows.len() as u16);
-    f.render_widget(Paragraph::new(rows).alignment(Alignment::Center), dest);
+    let dest = centered(area, cone_w, cone_h);
+    let buf = f.buffer_mut();
+    let (cw, ch) = (cone_w as usize, cone_h as usize);
+    let bg = (20u8, 23u8, 28u8); // BG_DARK
+
+    for row in 0..ch {
+        let y = dest.y + row as u16;
+        if y >= dest.bottom() { break; }
+        let y_top = row * 2;
+        let y_bot = row * 2 + 1;
+        let py_top = (y_top * img_h / (ch * 2)).min(img_h - 1);
+        let py_bot = (y_bot * img_h / (ch * 2)).min(img_h - 1);
+
+        for col in 0..cw {
+            let x = dest.x + col as u16;
+            if x >= dest.right() { break; }
+            let px = (col * img_w / cw).min(img_w - 1);
+
+            let top_px = cone.get_pixel(px as u32, py_top as u32).0;
+            let bot_px = cone.get_pixel(px as u32, py_bot as u32).0;
+
+            let rgb_top = blend_pixel(top_px, bg);
+            let rgb_bot = blend_pixel(bot_px, bg);
+
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_char('▀')
+                    .set_fg(Color::Rgb(rgb_top.0, rgb_top.1, rgb_top.2))
+                    .set_bg(Color::Rgb(rgb_bot.0, rgb_bot.1, rgb_bot.2));
+            }
+        }
+    }
 }
 
 /// Exact VLC Home Page View: Centered cone with clean prompts and instructions
@@ -139,7 +172,7 @@ fn empty_welcome(f: &mut Frame, area: Rect) {
     if area.width < 10 || area.height < 4 { return; }
     f.render_widget(Block::default().style(Style::default().bg(BG_DARK)), area);
 
-    let cone_h = 13.min(area.height.saturating_sub(4));
+    let cone_h = 14.min(area.height.saturating_sub(4));
     let cone_y = area.y + area.height.saturating_sub(cone_h + 4) / 2;
     let cone_area = Rect::new(area.x, cone_y, area.width, cone_h);
     vlc_cone_logo(f, cone_area);
@@ -490,9 +523,7 @@ pub fn draw(
         zones.back = Some(Rect::new(screen.x, screen.y, 16.min(screen.width), 1));
 
         if image.is_some() && !native_window {
-            let picture_area = if app.is_audio() {
-                Rect::new(video_area.x, video_area.y, video_area.width, video_area.height.saturating_sub(3))
-            } else if app.sidecar_enabled && !graphics.is_ansi() {
+            let picture_area = if app.is_audio() && video_area.height >= 6 {
                 Rect::new(video_area.x, video_area.y, video_area.width, video_area.height.saturating_sub(3))
             } else { video_area };
             video(f, image, graphics, picture_area, has_active_popup);
@@ -536,15 +567,30 @@ pub fn draw(
         }
     } else {
         // ── Windowed layout: VLC Desktop Layout ───────────────────────────────
-        let layout = Layout::default().direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),   // 0: Menu Bar (Media Playback Audio Video Subtitle Tools View Help)
-                Constraint::Min(4),      // 1: Center Canvas (Player or Playlist + Player)
-                Constraint::Length(1),   // 2: Timeline slider
-                Constraint::Length(1),   // 3: VLC Transport Controls (Play, Prev, Stop, Next, Fullscreen, Playlist, CC, Audio, Volume)
-                Constraint::Length(1),   // 4: Status / notifications bar
-            ])
-            .split(screen);
+        let show_gap = screen.height >= 16;
+        let layout = if show_gap {
+            Layout::default().direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1),   // 0: Menu Bar
+                    Constraint::Min(4),      // 1: Center Canvas (Player or Playlist + Player)
+                    Constraint::Length(1),   // 2: Timeline slider
+                    Constraint::Length(1),   // 3: Vertical spacer gap
+                    Constraint::Length(1),   // 4: VLC Transport Controls (Play, Prev, Stop, Next, Fullscreen, Playlist, CC, Audio, Volume)
+                    Constraint::Length(1),   // 5: Status / notifications bar
+                ])
+                .split(screen)
+        } else {
+            Layout::default().direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(1),   // 0: Menu Bar
+                    Constraint::Min(4),      // 1: Center Canvas (Player or Playlist + Player)
+                    Constraint::Length(1),   // 2: Timeline slider
+                    Constraint::Length(0),   // 3: No spacer gap
+                    Constraint::Length(1),   // 4: VLC Transport Controls (Play, Prev, Stop, Next, Fullscreen, Playlist, CC, Audio, Volume)
+                    Constraint::Length(1),   // 5: Status / notifications bar
+                ])
+                .split(screen)
+        };
 
         // 1. Top Menu Bar
         render_menu_bar(f, layout[0], app, &mut zones);
@@ -566,9 +612,7 @@ pub fn draw(
         zones.video = Some(video_area);
 
         if image.is_some() && !native_window {
-            let picture_area = if app.is_audio() {
-                Rect::new(video_area.x, video_area.y, video_area.width, video_area.height.saturating_sub(3))
-            } else if app.sidecar_enabled && !graphics.is_ansi() {
+            let picture_area = if app.is_audio() && video_area.height >= 6 {
                 Rect::new(video_area.x, video_area.y, video_area.width, video_area.height.saturating_sub(3))
             } else { video_area };
             video(f, image, graphics, picture_area, has_active_popup);
@@ -615,8 +659,13 @@ pub fn draw(
         zones.timeline = Some(time_layout[1]);
         f.render_widget(Paragraph::new(format!(" {} ", t_total)).style(Style::default().fg(DIM).bg(BAR_BG)), time_layout[2]);
 
+        // Spacer row between timeline seek slider and transport controls
+        if show_gap {
+            f.render_widget(Block::default().style(Style::default().bg(BAR_BG)), layout[3]);
+        }
+
         // 4. VLC Controls Toolbar (Text Buttons - NO emojis)
-        let bar = layout[3];
+        let bar = layout[4];
         f.render_widget(Block::default().style(Style::default().bg(BAR_BG)), bar);
         let mut x = bar.x + 1;
 
@@ -675,7 +724,7 @@ pub fn draw(
         zones.audio = Some(au_rect);
         x += 8;
 
-        // Volume TUI Slider widget on the right
+        // Spotify-style Volume Slider widget with draggable thumb knob on the right
         let vol_w = 26.min(bar.width.saturating_sub(x + 1));
         if vol_w >= 10 {
             let vol_x = bar.right().saturating_sub(vol_w);
@@ -683,7 +732,7 @@ pub fn draw(
             let vol_pct = info.volume.clamp(0, 125);
             let vol_ratio = (vol_pct as f64 / 125.0).clamp(0.0, 1.0);
 
-            // Split into "Vol " (4 cols), Slider Gauge (remaining cols), " 100%" (5 cols)
+            // Split into "Vol " (4 cols), Slider Track (remaining cols), " 100%" (5 cols)
             let vol_layout = Layout::default().direction(Direction::Horizontal)
                 .constraints([
                     Constraint::Length(4),
@@ -693,21 +742,46 @@ pub fn draw(
                 .split(vol_container);
 
             f.render_widget(Paragraph::new("Vol ").style(Style::default().fg(PALE).bg(BAR_BG)), vol_layout[0]);
-            let vol_gauge = Gauge::default()
-                .gauge_style(Style::default().fg(CYAN).bg(Color::Rgb(48, 54, 64)))
-                .ratio(vol_ratio)
-                .label("");
-            f.render_widget(vol_gauge, vol_layout[1]);
+
+            let track_area = vol_layout[1];
+            let track_w = track_area.width as usize;
+            if track_w > 0 {
+                let thumb_pos = if vol_pct <= 0 {
+                    0
+                } else if vol_pct >= 125 {
+                    track_w.saturating_sub(1)
+                } else {
+                    ((vol_ratio * (track_w.saturating_sub(1) as f64)).round() as usize).min(track_w.saturating_sub(1))
+                };
+
+                let mut track_spans = Vec::with_capacity(3);
+                // Active / filled portion before thumb
+                if thumb_pos > 0 {
+                    let filled_chars: String = "━".repeat(thumb_pos);
+                    track_spans.push(Span::styled(filled_chars, Style::default().fg(CYAN).bg(BAR_BG)));
+                }
+                // Spotify-style thumb knob: '●' in bold white/cyan
+                track_spans.push(Span::styled("●", Style::default().fg(Color::White).bg(BAR_BG).add_modifier(Modifier::BOLD)));
+                // Inactive / unfilled portion after thumb
+                if thumb_pos + 1 < track_w {
+                    let unfilled_chars: String = "─".repeat(track_w.saturating_sub(thumb_pos + 1));
+                    track_spans.push(Span::styled(unfilled_chars, Style::default().fg(Color::Rgb(65, 75, 90)).bg(BAR_BG)));
+                }
+
+                f.render_widget(Paragraph::new(Line::from(track_spans)), track_area);
+            }
+
             f.render_widget(Paragraph::new(format!("{:>4}%", vol_pct)).style(Style::default().fg(CYAN).bg(BAR_BG)), vol_layout[2]);
-            zones.volume = Some(vol_container);
+            // Save the exact track_area as the hit zone for volume click/drag with 1% resolution
+            zones.volume = Some(track_area);
         }
 
         // 5. Status & notification bar
         let message = if let Some(warn) = graphics.warning() { warn.to_string() }
             else if app.status_visible() { app.status.clone() }
             else { format!("VLC media player ready  -  {}  -  Ctrl+O Open  -  Drag & drop media  -  Space Play/Pause", graphics.label()) };
-        f.render_widget(Paragraph::new(short(&message, layout[4].width as usize))
-            .style(Style::default().fg(DIM).bg(BAR_BG)), layout[4]);
+        f.render_widget(Paragraph::new(short(&message, layout[5].width as usize))
+            .style(Style::default().fg(DIM).bg(BAR_BG)), layout[5]);
     }
 
     // Dropdowns and modals are rendered LAST with solid opaque cells to guarantee they are displayed directly over live video

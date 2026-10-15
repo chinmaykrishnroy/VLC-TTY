@@ -837,7 +837,11 @@ impl App {
                 else if hit(zones.subtitles, x, y) { self.open_tracks(Overlay::SubtitleTracks, player); }
                 else if hit(zones.audio, x, y) { self.open_tracks(Overlay::AudioTracks, player); }
                 else if let Some(vol_rect) = zones.volume.filter(|r| hit(Some(*r), x, y)) {
-                    let frac = (f64::from(x.saturating_sub(vol_rect.x)) / f64::from(vol_rect.width.max(1))).clamp(0.0, 1.0);
+                    let frac = if vol_rect.width <= 1 {
+                        1.0
+                    } else {
+                        (f64::from(x.saturating_sub(vol_rect.x)) / f64::from(vol_rect.width.saturating_sub(1))).clamp(0.0, 1.0)
+                    };
                     let new_vol = (frac * 125.0).round() as i32;
                     self.volume = new_vol;
                     player.set_volume(new_vol);
@@ -878,7 +882,11 @@ impl App {
                         player.seek_to((fraction * snap.length_ms as f64) as i64);
                     }
                 } else if let Some(vol_rect) = zones.volume.filter(|r| hit(Some(*r), x, y)) {
-                    let frac = (f64::from(x.saturating_sub(vol_rect.x)) / f64::from(vol_rect.width.max(1))).clamp(0.0, 1.0);
+                    let frac = if vol_rect.width <= 1 {
+                        1.0
+                    } else {
+                        (f64::from(x.saturating_sub(vol_rect.x)) / f64::from(vol_rect.width.saturating_sub(1))).clamp(0.0, 1.0)
+                    };
                     let new_vol = (frac * 125.0).round() as i32;
                     self.volume = new_vol;
                     player.set_volume(new_vol);
@@ -891,12 +899,12 @@ impl App {
                 self.selected = self.selected.saturating_sub(3);
             }
             MouseEventKind::ScrollUp => {
-                self.volume = (self.volume + 5).min(125);
+                self.volume = (self.volume + 1).min(125);
                 player.set_volume(self.volume);
                 self.notify(format!("Volume: {}%", self.volume));
             }
             MouseEventKind::ScrollDown => {
-                self.volume = self.volume.saturating_sub(5);
+                self.volume = self.volume.saturating_sub(1);
                 player.set_volume(self.volume);
                 self.notify(format!("Volume: {}%", self.volume));
             }
