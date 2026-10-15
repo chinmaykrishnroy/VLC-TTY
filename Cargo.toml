@@ -1,8 +1,8 @@
 [package]
 name = "termvlc"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
-description = "LibVLC media playback inside a pixel-graphics terminal on Windows, Linux and macOS, with graceful ANSI fallback"
+description = "VLC-inspired terminal player with fullscreen, subtitles, tracks and pixel graphics on Windows, Linux and macOS"
 license = "MIT"
 
 [dependencies]

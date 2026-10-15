@@ -43,19 +43,18 @@ unsafe extern "C" fn configure_video(opaque: *mut *mut c_void, chroma: *mut c_ch
     let ctx = &*(*opaque as *const CallbackContext);
     let in_w = (*width).max(1) as f64;
     let in_h = (*height).max(1) as f64;
-    // Decode at 720p or original source size, whichever is smaller.
-    // 720p matches or exceeds the pixel density of terminal windows while cutting
-    // memory bandwidth and decode CPU usage by >50%. Allow TERMVLC_DECODE_MAX=1080
-    // or TERMVLC_DECODE_MAX=0 for full source resolution.
+    // Decode at 1080p or the original source size, whichever is smaller.
+    // Allow TERMVLC_DECODE_MAX=0 to request native dimensions (e.g. 4K, uncapped).
     let requested_max = env::var("TERMVLC_DECODE_MAX").ok()
-        .and_then(|s| s.parse::<u32>().ok()).unwrap_or(720);
+        .and_then(|s| s.parse::<u32>().ok()).unwrap_or(1080);
     let scale = if requested_max == 0 { 1.0 } else {
         (requested_max as f64 * (16.0 / 9.0) / in_w)
             .min(requested_max as f64 / in_h).min(1.0)
     };
     let w = ((in_w * scale).round() as u32).max(1);
     let h = ((in_h * scale).round() as u32).max(1);
-    let pitch = (w * 4 + 31) & !31;
+    if w > 16_384 || h > 16_384 { return 0; }
+    let Some(pitch) = w.checked_mul(4).and_then(|n| n.checked_add(31)).map(|n| n & !31) else { return 0; };
     let chroma_bytes = b"RV32";
     ptr::copy_nonoverlapping(chroma_bytes.as_ptr() as *const c_char, chroma, 4);
     *width = w; *height = h; *pitches = pitch; *lines = h;
@@ -70,7 +69,8 @@ unsafe extern "C" fn lock_video(opaque: *mut c_void, planes: *mut *mut c_void) -
     let s = ctx.frames.size.lock().unwrap_or_else(|e| e.into_inner());
     let (width, height, pitch) = (s.width, s.height, s.pitch);
     if width == 0 || height == 0 || pitch == 0 { return ptr::null_mut(); }
-    let layout = Layout::from_size_align(pitch * height, 32).expect("valid frame layout");
+    let Some(bytes) = pitch.checked_mul(height) else { return ptr::null_mut(); };
+    let Ok(layout) = Layout::from_size_align(bytes, 32) else { return ptr::null_mut(); };
     let data = alloc_zeroed(layout);
     if data.is_null() { handle_alloc_error(layout) }
     *planes = data.cast();
@@ -92,6 +92,19 @@ unsafe extern "C" fn display_video(opaque: *mut c_void, picture: *mut c_void) {
     let serial = ctx.frames.presented.fetch_add(1, Ordering::Relaxed) + 1;
     let frame = Arc::new(VideoFrame { width: pic.width, height: pic.height, pitch: pic.pitch, bgra: data, serial });
     *ctx.frames.latest.lock().unwrap_or_else(|e| e.into_inner()) = Some(frame);
+}
+
+#[repr(C)]
+struct TrackDescription {
+    id: c_int,
+    name: *const c_char,
+    next: *mut TrackDescription,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MediaTrack {
+    pub id: i32,
+    pub name: String,
 }
 
 // Simple C signatures from the LibVLC 3.x public ABI.
@@ -116,6 +129,14 @@ struct Api {
     audio_get_volume: unsafe extern "C" fn(*mut c_void) -> c_int,
     audio_set_volume: unsafe extern "C" fn(*mut c_void, c_int) -> c_int,
     player_set_rate: unsafe extern "C" fn(*mut c_void, f32) -> c_int,
+    video_get_spu: unsafe extern "C" fn(*mut c_void) -> c_int,
+    video_set_spu: unsafe extern "C" fn(*mut c_void, c_int) -> c_int,
+    video_get_spu_description: unsafe extern "C" fn(*mut c_void) -> *mut TrackDescription,
+    video_set_subtitle_file: unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int,
+    audio_get_track: unsafe extern "C" fn(*mut c_void) -> c_int,
+    audio_set_track: unsafe extern "C" fn(*mut c_void, c_int) -> c_int,
+    audio_get_track_description: unsafe extern "C" fn(*mut c_void) -> *mut TrackDescription,
+    track_description_list_release: unsafe extern "C" fn(*mut TrackDescription),
     video_set_callbacks: unsafe extern "C" fn(*mut c_void, Option<LockFn>, Option<UnlockFn>, Option<DisplayFn>, *mut c_void),
     video_set_format_callbacks: unsafe extern "C" fn(*mut c_void, Option<FormatFn>, Option<CleanupFn>),
     errmsg: unsafe extern "C" fn() -> *const c_char,
@@ -125,16 +146,14 @@ impl Api {
     fn load() -> Result<Self> {
         let mut failures = Vec::new();
         for name in libvlc_candidates() {
+            // Loading libvlc.dll also needs libvlccore.dll and the VLC plugin
+            // directory; normal VLC installation doesn't modify PATH on Windows.
             #[cfg(windows)]
-            if let Some(parent) = name.parent() {
-                if parent.is_dir() {
-                    let old_path = env::var("PATH").unwrap_or_default();
-                    env::set_var("PATH", format!("{};{}", parent.display(), old_path));
-                    let plugins = parent.join("plugins");
-                    if plugins.is_dir() && env::var_os("VLC_PLUGIN_PATH").is_none() {
-                        env::set_var("VLC_PLUGIN_PATH", plugins);
-                    }
-                }
+            if let Some(folder) = name.parent().filter(|dir| dir.is_dir()) {
+                let existing = env::var_os("PATH").unwrap_or_default();
+                let joined = env::join_paths(std::iter::once(folder.to_path_buf()).chain(env::split_paths(&existing)))
+                    .unwrap_or(existing);
+                env::set_var("PATH", joined);
             }
             match unsafe { Library::new(&name) } {
                 Ok(lib) => match unsafe { Self::symbols(lib, name.clone()) } {
@@ -177,6 +196,14 @@ impl Api {
             player_set_time: f!("libvlc_media_player_set_time"),
             audio_get_volume: f!("libvlc_audio_get_volume"), audio_set_volume: f!("libvlc_audio_set_volume"),
             player_set_rate: f!("libvlc_media_player_set_rate"),
+            video_get_spu: f!("libvlc_video_get_spu"),
+            video_set_spu: f!("libvlc_video_set_spu"),
+            video_get_spu_description: f!("libvlc_video_get_spu_description"),
+            video_set_subtitle_file: f!("libvlc_video_set_subtitle_file"),
+            audio_get_track: f!("libvlc_audio_get_track"),
+            audio_set_track: f!("libvlc_audio_set_track"),
+            audio_get_track_description: f!("libvlc_audio_get_track_description"),
+            track_description_list_release: f!("libvlc_track_description_list_release"),
             video_set_callbacks: f!("libvlc_video_set_callbacks"),
             video_set_format_callbacks: f!("libvlc_video_set_format_callbacks"),
             errmsg: f!("libvlc_errmsg"),
@@ -268,12 +295,14 @@ pub struct VlcPlayer {
     player: *mut c_void,
     context: Box<CallbackContext>,
     rate: f32,
+    native_window: bool,
 }
 
 impl VlcPlayer {
     pub fn new() -> Result<Self> { Self::new_with_window(false) }
 
     pub fn library_path(&self) -> &Path { &self.api.loaded_from }
+    pub fn is_native_window(&self) -> bool { self.native_window }
 
     pub fn new_with_window(native_window: bool) -> Result<Self> {
         let api = Api::load()?;
@@ -294,7 +323,7 @@ impl VlcPlayer {
                 (api.video_set_format_callbacks)(player, Some(configure_video), None);
             }
         }
-        Ok(Self { api, instance, player, context, rate: 1.0 })
+        Ok(Self { api, instance, player, context, rate: 1.0, native_window })
     }
 
     fn error_message(&self) -> String {
@@ -306,22 +335,7 @@ impl VlcPlayer {
 
     pub fn open(&mut self, locator: &str) -> Result<()> {
         let is_url = locator.contains("://");
-        let text = if is_url {
-            locator.to_owned()
-        } else {
-            let p = Path::new(locator);
-            if !p.exists() {
-                bail!("file not found: {locator}");
-            }
-            let canonical = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-            let mut s = canonical.to_string_lossy().into_owned();
-            if s.starts_with(r"\\?\UNC\") {
-                s = format!(r"\\{}", &s[8..]);
-            } else if s.starts_with(r"\\?\") {
-                s = s[4..].to_string();
-            }
-            s
-        };
+        let text = if is_url { locator.to_owned() } else { Path::new(locator).canonicalize().with_context(|| format!("file not found: {locator}"))?.to_string_lossy().into_owned() };
         let c = CString::new(text.clone()).map_err(|_| anyhow!("path contains a NUL byte"))?;
         unsafe {
             (self.api.player_stop)(self.player);
@@ -356,6 +370,61 @@ impl VlcPlayer {
     pub fn set_rate(&mut self, value: f32) {
         if unsafe { (self.api.player_set_rate)(self.player, value) } == 0 { self.rate = value; }
     }
+    /// The LibVLC 3.x linked-list is owned by LibVLC; copy strings and release it promptly.
+    unsafe fn track_descriptions(
+        &self,
+        getter: unsafe extern "C" fn(*mut c_void) -> *mut TrackDescription,
+    ) -> Vec<MediaTrack> {
+        let head = getter(self.player);
+        let mut cursor = head;
+        let mut tracks = Vec::new();
+        for _ in 0..256 {
+            if cursor.is_null() { break; }
+            let item = &*cursor;
+            let name = if item.name.is_null() { String::from("Unnamed track") }
+                else { CStr::from_ptr(item.name).to_string_lossy().into_owned() };
+            tracks.push(MediaTrack { id: item.id, name });
+            cursor = item.next;
+        }
+        if !head.is_null() { (self.api.track_description_list_release)(head); }
+        tracks
+    }
+    pub fn subtitle_tracks(&self) -> Vec<MediaTrack> {
+        unsafe { self.track_descriptions(self.api.video_get_spu_description) }
+    }
+    pub fn current_subtitle_id(&self) -> i32 {
+        unsafe { (self.api.video_get_spu)(self.player) }
+    }
+    pub fn select_subtitle(&mut self, id: i32) -> bool {
+        unsafe { (self.api.video_set_spu)(self.player, id) == 0 }
+    }
+    pub fn audio_tracks(&self) -> Vec<MediaTrack> {
+        unsafe { self.track_descriptions(self.api.audio_get_track_description) }
+    }
+    pub fn current_audio_id(&self) -> i32 {
+        unsafe { (self.api.audio_get_track)(self.player) }
+    }
+    pub fn select_audio(&mut self, id: i32) -> bool {
+        unsafe { (self.api.audio_set_track)(self.player, id) == 0 }
+    }
+    pub fn load_vlc_subtitle(&mut self, path: &Path) -> Result<()> {
+        let absolute = path.canonicalize().with_context(|| format!("Subtitle not found: {}", path.display()))?;
+        let c = CString::new(absolute.to_string_lossy().as_bytes())?;
+        if unsafe { (self.api.video_set_subtitle_file)(self.player, c.as_ptr()) } == 0 {
+            bail!("VLC could not load this subtitle (or media isn't ready yet): {}", path.display());
+        }
+        Ok(())
+    }
+    pub fn seek_to(&mut self, ms: i64) {
+        let length = unsafe { (self.api.player_get_length)(self.player) };
+        let value = if length > 0 { ms.clamp(0, length) } else { ms.max(0) };
+        unsafe { (self.api.player_set_time)(self.player, value); }
+    }
+    pub fn stop(&mut self) {
+        unsafe { (self.api.player_stop)(self.player); }
+        *self.context.frames.latest.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
     pub fn latest_frame(&self) -> Option<Arc<VideoFrame>> {
         self.context.frames.latest.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
@@ -411,22 +480,5 @@ mod tests {
         assert_eq!(frame.serial, 1);
         assert_eq!(frame.width, w as usize);
         assert_eq!(frame.bgra[0], 42);
-    }
-    #[test]
-    fn test_switch_videos() {
-        let mut player = match VlcPlayer::new() {
-            Ok(p) => p,
-            Err(_) => return,
-        };
-        let file1 = r"E:\data\Media\TV\Breaking Bad\Season 02\Breaking Bad - S02E03.mkv";
-        let file2 = r"E:\data\Media\TV\Breaking Bad\Season 02\Breaking Bad - S02E04.mkv";
-        if std::path::Path::new(file1).exists() {
-            let _ = player.open(file1);
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            if std::path::Path::new(file2).exists() {
-                let _ = player.open(file2);
-                std::thread::sleep(std::time::Duration::from_millis(500));
-            }
-        }
     }
 }

@@ -1,27 +1,23 @@
-# Validation — TermVLC v0.4.0 (source candidate)
+# v0.5.0 validation report
 
-## Verified in packaging environment
+Status: **source release candidate, NOT compile-verified or real-playback-verified**.
 
-- Three-platform CLI instructions and helper scripts exist, are nonempty, and are included in the archive.
-- OS-specific LibVLC candidate paths include the Windows `libvlc.dll`, Linux `libvlc.so.5`, macOS VLC.app layout plus Intel/Apple Silicon Homebrew library prefixes.
-- `app.rs` uses `ratatui::crossterm` instead of relying on an undeclared direct `crossterm` dependency (fixed from v0.3).
-- CI is configured for Windows, Ubuntu, and macOS compilation and unit tests; **it has not yet been run**.
-- Cargo manifest and workflow YAML structurally parse. Archive ZIP integrity checked.
-- Bundled sample MP4 is present and FFprobe-readable.
+Checks completed in the packaging container:
+- Reused **v0.4.0** full pixel-graphics and cross-platform source, not a regression to v0.2.
+- Added LibVLC 3.x subtitle/audio track functions and UTF-8 sidecar parser.
+- Checked Rust source tokenization, balanced delimiters, project manifest, expected source paths, ZIP integrity and FFmpeg sample metadata.
+- Verified original sample MP4 with `ffprobe` and sample subtitle timestamps by inspection.
 
-## Not verified
+Unavailable in this environment:
+- `cargo test` / `cargo build`: **not run**, no Rust toolchain and no access to download one.
+- Actual LibVLC playback and graphical terminal protocol output: **not run**, LibVLC not installed.
+- Win11/Linux/macOS binaries or runtime verification: **not run**. CI workflow can test builds after pushing the files to GitHub.
 
-- `cargo build`, `cargo test`, Rust formatting and Clippy: no Rust toolchain/crates registry available in the sandbox.
-- Real LibVLC video decoding/audio playback on Windows, Linux, or macOS.
-- Terminal graphics autodetection, protocol redraw performance, or high-FPS playback.
-- Native-window behavior on each OS.
+Windows first smoke test:
+1. `cargo build --release`
+2. `cargo test`
+3. `./target/release/termvlc.exe --doctor`
+4. `./target/release/termvlc.exe --graphics auto ./samples/sample.mp4`
+5. Press F, Esc and click the Back control; check subtitles at 1s and 4s, press S and A, click and drag the timeline, press G for ANSI fallback.
 
-## Local acceptance matrix
-
-| Platform | Minimum tests |
-| --- | --- |
-| Windows 11 | `cargo test`; `--doctor`; auto graphics; Sixel if supported; ANSI; `--native-window`; clean exit |
-| Linux | Same, then Kitty/Sixel with a compatible emulator, resize and SSH checks |
-| macOS Intel/ARM | Same, iTerm2/Kitty graphic paths, VLC.app plugin loading, native-window test |
-
-Please capture the **first failing command and full error output** instead of assuming the package is a verified release.
+If compilation fails, capture the **first** Rust compiler error including file and line number. If the runtime fails, include `--doctor` output and terminal emulator/version.

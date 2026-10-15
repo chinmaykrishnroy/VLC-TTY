@@ -11,4 +11,5 @@ cargo test
 if ($LASTEXITCODE -ne 0) { throw "Rust tests failed" }
 cargo run --release -- --doctor
 if ($LASTEXITCODE -ne 0) { throw "VLC diagnostics failed" }
-cargo run --release -- --graphics auto .\samples\sample.mp4
+$Media = if ($args.Count -gt 0) { $args[0] } else { '.\samples\sample.mp4' }
+& '.\target\release\termvlc.exe' --graphics auto $Media

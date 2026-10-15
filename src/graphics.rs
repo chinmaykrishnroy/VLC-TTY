@@ -112,13 +112,21 @@ impl GraphicsRenderer {
         }
     }
 
+    /// Clear the cached frame on media changes, fullscreen transitions and resizes.
+    /// In-flight worker results for the old rectangle are ignored after resize.
+    pub fn invalidate(&mut self) {
+        self.current = None;
+        self.current_serial = 0;
+        self.area = Size::default();
+        self.last_request_at = Instant::now() - Duration::from_secs(1);
+    }
+
     pub fn is_ansi(&self) -> bool { self.ansi_override }
     pub fn label(&self) -> String {
         if self.ansi_override { "ANSI half-block fallback".into() }
         else { format!("{:?} pixel graphics", self.protocol_kind) }
     }
     pub fn detected_label(&self) -> String { format!("{:?}", self.detected) }
-    #[allow(dead_code)]
     pub fn warning(&self) -> Option<&str> { self.error_note.as_deref() }
 
     /// 'g' toggles between pixel graphics and ANSI without destroying state.
@@ -161,8 +169,10 @@ impl GraphicsRenderer {
         let size = Size::new(area.width, area.height);
         if size != self.area {
             self.area = size;
-            // Old frame is retained until a new frame arrives for the new area.
-            // Sizing check below ensures it won't be drawn if it exceeds the area.
+            // Old frame stays until a correctly sized new frame arrives, but
+            // can't be drawn into a smaller area without clipping artifacts.
+            self.current = None;
+            self.current_serial = 0;
         }
         if let Some(ref protocol) = self.current {
             let size = protocol.size();
@@ -249,36 +259,14 @@ fn encode_sixel_fast(
 /// ratatui-image prepends an ECH clear_area sequence (`\x1b[...X`) meant for static transparent
 /// images. In high-frequency video playback, erasing the cell rectangle to black before every
 /// frame causes the terminal to flash black (blinking). Stripping this allows subsequent frames
-/// to seamlessly overwrite previous pixels without clearing the area first.
+/// to seamlessly overwrite previous pixels without screen blinking.
 fn strip_clear_area(proto: &mut Protocol) {
-    match proto {
-        Protocol::Sixel(ref mut sixel) => {
-            if sixel.is_tmux {
-                if let Some(pos) = sixel.data.find("\x1b\x1bP") {
-                    let start = "\x1bPtmux;\x1b";
-                    let payload = &sixel.data[pos..];
-                    sixel.data = format!("{start}{payload}");
-                }
-            } else if let Some(pos) = sixel.data.find("\x1bP") {
-                if pos > 0 {
-                    sixel.data.drain(..pos);
-                }
+    if let Protocol::Sixel(ref mut sixel) = proto {
+        if sixel.data.starts_with("\x1b[") {
+            if let Some(pos) = sixel.data.find("\x1bP") {
+                sixel.data = sixel.data[pos..].to_string();
             }
         }
-        Protocol::ITerm2(ref mut iterm2) => {
-            if iterm2.is_tmux {
-                if let Some(pos) = iterm2.data.find("\x1b\x1b]1337;") {
-                    let start = "\x1bPtmux;\x1b";
-                    let payload = &iterm2.data[pos..];
-                    iterm2.data = format!("{start}{payload}");
-                }
-            } else if let Some(pos) = iterm2.data.find("\x1b]1337;") {
-                if pos > 0 {
-                    iterm2.data.drain(..pos);
-                }
-            }
-        }
-        _ => {}
     }
 }
 
@@ -299,8 +287,6 @@ fn bgra_to_rgb(frame: &VideoFrame) -> Option<RgbImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui_image::protocol::sixel::Sixel;
-
     #[test]
     fn choice_parsing() {
         assert_eq!("kitty".parse::<GraphicsChoice>().unwrap(), GraphicsChoice::Kitty);
@@ -322,9 +308,9 @@ mod tests {
     }
     #[test]
     fn strips_clear_area_from_sixel() {
-        let mut proto = Protocol::Sixel(Sixel {
-            data: "\x1b[80X\x1b[1B\x1b[22A\x1bPq#0;2;0;0;0#1...".to_string(),
-            size: Size::new(80, 22),
+        let mut proto = Protocol::Sixel(ratatui_image::protocol::sixel::Sixel {
+            data: "\x1b[80X\x1bPq#0;2;0;0;0#0~-\x1b\\".to_string(),
+            size: Size::new(10, 5),
             is_tmux: false,
         });
         strip_clear_area(&mut proto);
