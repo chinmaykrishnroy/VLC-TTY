@@ -153,10 +153,14 @@ impl GraphicsRenderer {
                 }
             }
         }
-        if self.ansi_override || self.busy || self.area.width == 0 || self.area.height == 0
+        // If a frame is available and enough time has passed, submit it immediately.
+        // Don't gate on `busy` — if a new frame arrived while the worker was busy,
+        // the old in-flight result is already stale; submit the latest one instead.
+        if self.ansi_override || self.area.width == 0 || self.area.height == 0
             || self.last_request_at.elapsed() < self.frame_interval { return; }
         if let Some(frame) = frame {
             if frame.serial == self.current_serial { return; }
+            // Try to submit; if the channel is full the previous request is still pending.
             if self.request_tx.try_send(EncodeRequest { frame, area: self.area }).is_ok() {
                 self.busy = true;
                 self.last_request_at = Instant::now();

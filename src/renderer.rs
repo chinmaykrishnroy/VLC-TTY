@@ -1,4 +1,4 @@
-//! VLC-inspired terminal interface; intentionally doesn't touch decoder threads.
+//! VLC media player — terminal interface. Intentionally doesn't touch decoder threads.
 //! Fullscreen occupies the entire alternate screen and only shows small overlays.
 use ratatui::{
     Frame,
@@ -11,9 +11,9 @@ use crate::{app::{App, HitZones, InputPurpose, Overlay}, graphics::GraphicsRende
     vlc::{PlaybackSnapshot, VideoFrame}};
 
 const ORANGE: Color = Color::Rgb(255, 145, 50);
-const PALE: Color = Color::Rgb(225, 234, 241);
-const CYAN: Color = Color::Rgb(74, 203, 216);
-const DIM: Color = Color::Rgb(115, 131, 150);
+const PALE:   Color = Color::Rgb(225, 234, 241);
+const CYAN:   Color = Color::Rgb(74, 203, 216);
+const DIM:    Color = Color::Rgb(115, 131, 150);
 
 fn pixel(frame: &VideoFrame, x: usize, y: usize) -> (u8, u8, u8) {
     if frame.width == 0 || frame.height == 0 { return (0,0,0); }
@@ -67,28 +67,50 @@ fn centered(outer:Rect,width:u16,height:u16)->Rect {
         outer.y+(outer.height.saturating_sub(height))/2, width.min(outer.width), height.min(outer.height))
 }
 
-/// Original ANSI-art traffic cone: orange bands alternate with light reflective bands.
-fn logo(f:&mut Frame, area:Rect, compact:bool) {
-    if area.width < 16 || area.height < if compact {3} else {10} {return;}
-    let shape=if compact {vec!["    /\\    ","   /==\\   ","  /____\\  "]}
-    else {vec![
-        "       /\\       ",
-        "      /##\\      ",
-        "     /====\\     ",
-        "    /######\\    ",
-        "   /========\\   ",
-        "  /##########\\  ",
-        " /============\\ ",
-        "/##############\\",
-        "|________________|",
-        "  |__________|  ",
-    ]};
-    let mut lines=Vec::new();
-    for s in shape {
-        let color=if s.contains('=') || s.contains('_') { PALE } else { ORANGE };
-        lines.push(Line::styled(s,Style::default().fg(color).add_modifier(Modifier::BOLD)));
+/// The VLC traffic cone — orange bands alternate with bright reflective white bands.
+/// The shape is the classic VLC icon: pointy tip, alternating stripes, flat base.
+fn logo(f: &mut Frame, area: Rect, compact: bool) {
+    if compact {
+        // Compact 3-row version for the browser header strip
+        if area.width < 14 || area.height < 3 { return; }
+        // Each row is a pair of (text, color)
+        let rows: &[(&str, Color)] = &[
+            ("    /\\    ",   ORANGE),
+            ("   /\\/\\   ",  PALE),
+            ("  /====\\  ",  ORANGE),
+            (" /########\\ ", ORANGE),
+        ];
+        let to_draw = rows.iter().take(3);
+        let mut lines = Vec::new();
+        for (s, color) in to_draw {
+            lines.push(Line::styled(*s, Style::default().fg(*color).add_modifier(Modifier::BOLD)));
+        }
+        let dest = centered(area, 12, lines.len() as u16);
+        f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), dest);
+        return;
     }
-    let dest=centered(area,17,lines.len() as u16);
+    if area.width < 18 || area.height < 11 { return; }
+    // Full VLC icon — proper alternating orange / white (reflective) stripes.
+    // Format: (text, is_orange_band)
+    // The tip is pure orange, then reflective white, then orange, white, orange, white base.
+    let rows: &[(&str, Color)] = &[
+        ("        /\\        ",  ORANGE),            // tip — orange
+        ("       /  \\       ",  ORANGE),
+        ("      /====\\      ",  PALE),              // 1st reflective band
+        ("     /  ##  \\     ",  ORANGE),            // orange band
+        ("    /========\\    ",  PALE),              // 2nd reflective band
+        ("   /  ######  \\   ",  ORANGE),            // orange band
+        ("  /============\\  ",  PALE),              // 3rd reflective band
+        (" /  ##########  \\ ",  ORANGE),            // orange band
+        ("/================\\", PALE),               // base reflective
+        ("|________________|", Color::Rgb(200,215,225)), // rim
+        ("    |________|    ", DIM),                 // base shadow
+    ];
+    let mut lines = Vec::new();
+    for (text, color) in rows {
+        lines.push(Line::styled(*text, Style::default().fg(*color).add_modifier(Modifier::BOLD)));
+    }
+    let dest = centered(area, 19, lines.len() as u16);
     f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), dest);
 }
 
@@ -120,16 +142,16 @@ fn subtitle(f:&mut Frame,app:&App,info:&PlaybackSnapshot,area:Rect) {
         .wrap(Wrap {trim:false}), dest);
 }
 
-fn empty_welcome(f:&mut Frame,area:Rect) {
-    logo(f,Rect::new(area.x,area.y,area.width,area.height.saturating_sub(6)),false);
+fn empty_welcome(f: &mut Frame, area: Rect) {
+    logo(f, Rect::new(area.x, area.y, area.width, area.height.saturating_sub(6)), false);
     let text = Paragraph::new(vec![
-        Line::styled("T E R M V L C",Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
-        Line::styled("Your media. Your terminal.",Style::default().fg(PALE)),
+        Line::styled("VLC media player", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
+        Line::styled("Open a file or browse your library.", Style::default().fg(PALE)),
         Line::from(""),
-        Line::styled("Enter  Play    O  Open    ?  Help",Style::default().fg(DIM)),
+        Line::styled("Enter  Play    O  Open    ?  Help", Style::default().fg(DIM)),
     ]).alignment(Alignment::Center);
-    let boxarea=Rect::new(area.x,area.bottom().saturating_sub(6),area.width,5.min(area.height));
-    f.render_widget(text,boxarea);
+    let boxarea = Rect::new(area.x, area.bottom().saturating_sub(6), area.width, 5.min(area.height));
+    f.render_widget(text, boxarea);
 }
 
 fn browser(f:&mut Frame,app:&App,area:Rect,zones:&mut HitZones) {
@@ -238,43 +260,45 @@ pub fn draw(f:&mut Frame,app:&App,info:&PlaybackSnapshot,image:Option<&VideoFram
     }
     let graphics_modal = (app.overlay != Overlay::None || app.input.is_some()) && !graphics.is_ansi();
     if app.fullscreen {
-        // Full-frame clear; absolutely no normal header/browser/progress/footer.
-        f.render_widget(Clear,screen);
-        // Only 2 lines are reserved at the very top for a clickable Back
-        // target. The rest is exclusively video, without regular TUI panels.
-        // Pixel graphics may cover text in the same cells, so reserving the
-        // strip is safer than overlaying the button directly onto image pixels.
-        let movie_area=Rect::new(screen.x,screen.y+2,screen.width,screen.height.saturating_sub(2));
+        // Full-frame clear; no normal header/browser/progress/footer.
+        f.render_widget(Clear, screen);
+        // Video fills the ENTIRE screen edge-to-edge.
+        // BACK button floats as a 1-row overlay rendered after video.
+        let movie_area = screen;
         if !native_window {
-            // For image protocols put sidecar captions outside the placement.
-            let video_area=if app.sidecar_enabled && !graphics.is_ansi() {
-                Rect::new(movie_area.x,movie_area.y,movie_area.width,movie_area.height.saturating_sub(4))
-            } else {movie_area};
-            if !graphics_modal { video(f,image,graphics,video_area); }
-        } else {empty_welcome(f,movie_area);}
-        subtitle(f,app,info,screen);
-        let back=Rect::new(screen.x+1,screen.y,18.min(screen.width-2),1);
-        f.render_widget(Paragraph::new(" ‹ BACK  [Esc / F] ")
-            .style(Style::default().bg(Color::Black).fg(ORANGE).add_modifier(Modifier::BOLD)),back);
-        zones.back=Some(back);
-        if app.show_osd(){
-            let label=format!(" {}   {} / {}   {}%   {:.2}× ",state_label(info.state),time(info.time_ms),time(info.length_ms),info.volume,info.rate);
-            let row=Rect::new(screen.x+1,screen.bottom().saturating_sub(1),screen.width.saturating_sub(2),1);
-            f.render_widget(Paragraph::new(short(&label,row.width as usize)).style(Style::default().fg(PALE).bg(Color::Black)),row);
+            let video_area = if app.sidecar_enabled && !graphics.is_ansi() {
+                Rect::new(movie_area.x, movie_area.y, movie_area.width, movie_area.height.saturating_sub(4))
+            } else { movie_area };
+            if !graphics_modal { video(f, image, graphics, video_area); }
+        } else { empty_welcome(f, movie_area); }
+        subtitle(f, app, info, screen);
+        // Floating BACK button — Clear the row first so it draws on top of video
+        let back = Rect::new(screen.x, screen.y, 20.min(screen.width), 1);
+        f.render_widget(Clear, back);
+        f.render_widget(Paragraph::new(" ‹ Back  [Esc / F] ")
+            .style(Style::default().bg(Color::Black).fg(ORANGE).add_modifier(Modifier::BOLD)), back);
+        zones.back = Some(back);
+        if app.show_osd() {
+            let label = format!(" {}   {} / {}   {}%   {:.2}× ",
+                state_label(info.state), time(info.time_ms), time(info.length_ms), info.volume, info.rate);
+            let row = Rect::new(screen.x, screen.bottom().saturating_sub(1), screen.width, 1);
+            f.render_widget(Clear, row);
+            f.render_widget(Paragraph::new(short(&label, row.width as usize))
+                .style(Style::default().fg(PALE).bg(Color::Black)), row);
         }
     } else {
         let layout=Layout::default().direction(Direction::Vertical)
             .constraints([Constraint::Length(3),Constraint::Min(4),Constraint::Length(3),Constraint::Length(2),Constraint::Length(1)])
             .split(screen);
-        let title=Paragraph::new(Line::from(vec![
-            Span::styled("   ▲  ",Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
-            Span::styled("TERM",Style::default().fg(PALE).add_modifier(Modifier::BOLD)),
-            Span::styled("VLC",Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("  ·  {}",graphics.label()),Style::default().fg(DIM)),
-            Span::styled(format!("  [ {} ]",state_label(info.state)),Style::default().fg(CYAN)),
-        ])).block(Block::default().title(" TERMINAL MEDIA PLAYER ").borders(Borders::ALL)
+        let title = Paragraph::new(Line::from(vec![
+            Span::styled("  ▲ ", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
+            Span::styled("VLC", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
+            Span::styled(" media player", Style::default().fg(PALE).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("  ·  {}", graphics.label()), Style::default().fg(DIM)),
+            Span::styled(format!("  [ {} ]", state_label(info.state)), Style::default().fg(CYAN)),
+        ])).block(Block::default().title(" VLC MEDIA PLAYER ").borders(Borders::ALL)
             .border_style(Style::default().fg(DIM)));
-        f.render_widget(title,layout[0]);
+        f.render_widget(title, layout[0]);
         let columns=Layout::default().direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(27),Constraint::Percentage(73)]).split(layout[1]);
         browser(f,app,columns[0],&mut zones);

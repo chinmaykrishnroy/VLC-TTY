@@ -25,7 +25,7 @@ struct Options {
     fps:u32,native_window:bool,doctor:bool,
 }
 fn usage(){
-    println!("TermVLC v0.5.0  ·  Rust + Ratatui + LibVLC 3.x\n\n\
+    println!("VLC media player  v0.5.0  ·  Rust + Ratatui + LibVLC 3.x\n\n\
 Usage: termvlc [OPTIONS] [VIDEO|DIRECTORY|URL]\n\n\
 Options:\n\
   --graphics auto|kitty|sixel|iterm2|ansi     Auto detect (default)\n\
@@ -42,7 +42,7 @@ Requires a compatible LibVLC 3.x shared library.\n");
 }
 fn options()->Result<Options>{
     let mut out=Options {media:None,subtitle:None,graphics:GraphicsChoice::Auto,
-        fps:24,native_window:false,doctor:false};
+        fps:30,native_window:false,doctor:false};
     let mut args=std::env::args().skip(1);
     while let Some(arg)=args.next(){
         match arg.as_str(){
@@ -105,8 +105,8 @@ fn main() -> Result<()> {
 fn run() -> Result<()> {
     let opts=options()?;
     if opts.doctor {
-        println!("TermVLC diagnostics\nOS: {}\nVLC_HOME: {}",
-            std::env::consts::OS,std::env::var("VLC_HOME").unwrap_or_else(|_|"(unset)".into()));
+        println!("VLC media player  diagnostics\nOS: {}\nVLC_HOME: {}",
+            std::env::consts::OS, std::env::var("VLC_HOME").unwrap_or_else(|_| "(unset)".into()));
         match VlcPlayer::new() {
             Ok(p)=>println!("LibVLC loaded: {}\nRun the sample to check actual decoding.",p.library_path().display()),
             Err(e)=>{println!("LibVLC unavailable: {e:#}"); std::process::exit(1);}
@@ -138,7 +138,7 @@ fn run() -> Result<()> {
     let mut last_draw=Instant::now()-Duration::from_secs(1);
     let interval=Duration::from_millis((1000/opts.fps.max(1)) as u64);
     loop {
-        if event::poll(Duration::from_millis(8))? {
+        if event::poll(Duration::from_millis(4))? {
             match event::read()? {
                 Event::Key(key) if key.kind==KeyEventKind::Press => {
                     if key.code==KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL){break;}
