@@ -1,6 +1,7 @@
 mod app;
 mod dialogs;
 mod graphics;
+mod metadata;
 mod renderer;
 mod subtitles;
 mod vlc;
@@ -106,21 +107,39 @@ fn main() -> Result<()> {
     }
 }
 
+#[cfg(windows)]
+fn toggle_window_fullscreen() {
+    extern "system" {
+        fn keybd_event(b_vk: u8, b_scan: u8, dw_flags: u32, dw_extra_info: usize);
+    }
+    const VK_F11: u8 = 0x7A;
+    const KEYEVENTF_KEYUP: u32 = 0x0002;
+    unsafe {
+        keybd_event(VK_F11, 0, 0, 0);
+        keybd_event(VK_F11, 0, KEYEVENTF_KEYUP, 0);
+    }
+}
+#[cfg(not(windows))]
+fn toggle_window_fullscreen() {}
+
 fn drain_key_burst(first: char) -> Result<String> {
     let mut s = String::new();
     s.push(first);
     // ConPTY / Windows Terminal injects dropped Explorer files as rapid KeyPress bursts.
-    // Drain all immediately queued characters (< 20ms) into a complete path string.
-    while event::poll(Duration::from_millis(20))? {
+    // Keep accumulating while keys arrive within 40ms.
+    while event::poll(Duration::from_millis(40))? {
         match event::read()? {
-            Event::Key(k) if k.kind == KeyEventKind::Press => {
-                match k.code {
-                    KeyCode::Char(c) => s.push(c),
-                    KeyCode::Enter => break,
-                    _ => break,
+            Event::Key(k) => {
+                if k.kind == KeyEventKind::Press {
+                    match k.code {
+                        KeyCode::Char(c) => s.push(c),
+                        KeyCode::Enter => break,
+                        _ => {}
+                    }
                 }
+                // Do NOT break on KeyEventKind::Release so the dropped string isn't truncated!
             }
-            _ => break,
+            _ => {}
         }
     }
     Ok(s)
@@ -167,7 +186,7 @@ fn run() -> Result<()> {
                     if key.code==KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL){break;}
                     if let KeyCode::Char(c) = key.code {
                         if app.input.is_none() && !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) {
-                            if event::poll(Duration::from_millis(0))? {
+                            if event::poll(Duration::from_millis(35))? {
                                 let burst = drain_key_burst(c)?;
                                 if burst.chars().count() > 1 {
                                     let first_ch = burst.chars().next().unwrap();
@@ -202,13 +221,14 @@ fn run() -> Result<()> {
             if previous_fullscreen != app.fullscreen {
                 let seq = if app.fullscreen { "\x1b[10;1t" } else { "\x1b[10;2t" };
                 let _ = execute!(io::stdout(), style::Print(seq));
+                toggle_window_fullscreen();
             }
             terminal.clear()?;
             graphics.invalidate();
             previous_fullscreen = app.fullscreen;
             previous_media = app.current.clone();
         }
-        let frame=if opts.native_window {None}else{player.latest_frame()};
+        let frame = if opts.native_window { None } else { player.latest_frame().or_else(|| app.audio_thumbnail()) };
         if !opts.native_window {graphics.prepare(frame.clone());}
         if last_draw.elapsed()>=interval {
             let info=player.snapshot();

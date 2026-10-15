@@ -1,8 +1,8 @@
 //! UI state, media library, mouse+keyboard control. All media I/O stays in LibVLC.
-use std::{fs, path::{Path, PathBuf}, time::{Duration, Instant}};
+use std::{fs, path::{Path, PathBuf}, sync::Arc, time::{Duration, Instant}};
 use anyhow::Result;
 use ratatui::{layout::Rect, crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind}};
-use crate::{renderer::time, subtitles::SubtitleFile, vlc::VlcPlayer};
+use crate::{renderer::time, subtitles::SubtitleFile, vlc::{VideoFrame, VlcPlayer}};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewMode {
@@ -174,10 +174,15 @@ pub struct App {
     pub last_video_click: Option<Instant>,
     pub active_menu: Option<MenuKind>,
     pub menu_selected: usize,
+    pub audio_metadata: Option<crate::metadata::AudioMetadata>,
 }
 
 fn supported(p: &Path) -> bool {
-    const EXTS: &[&str] = &["mp4", "mkv", "avi", "mov", "webm", "m4v", "wmv", "flv", "ts", "mpeg", "mpg", "3gp", "vob", "mp3", "flac", "ogg", "wav", "m4a", "aac", "opus"];
+    const EXTS: &[&str] = &[
+        "mp4", "mkv", "avi", "mov", "webm", "m4v", "wmv", "flv", "ts", "mpeg", "mpg", "3gp", "vob",
+        "mp3", "flac", "ogg", "wav", "m4a", "aac", "opus", "wma", "ape", "alac", "aiff", "aif",
+        "mka", "mid", "midi", "ac3", "dts", "ra", "m4b", "m4p", "oga"
+    ];
     p.is_dir() || p.extension().and_then(|x| x.to_str())
         .is_some_and(|s| EXTS.contains(&s.to_ascii_lowercase().as_str()))
 }
@@ -200,6 +205,7 @@ impl App {
             selected_audio: "Default".into(), last_osd: Instant::now() - Duration::from_secs(10), last_file_click: None,
             last_video_click: None,
             active_menu: None, menu_selected: 0,
+            audio_metadata: None,
         };
         app.refresh();
         if resolved.is_file() {
@@ -207,6 +213,13 @@ impl App {
             if let Some(i) = app.entries.iter().position(|p| p.canonicalize().ok().as_ref() == Some(&absolute)) { app.selected = i; }
         }
         app
+    }
+
+    pub fn audio_thumbnail(&self) -> Option<Arc<VideoFrame>> {
+        self.audio_metadata.as_ref()?.thumbnail.clone()
+    }
+    pub fn is_audio(&self) -> bool {
+        self.current.as_deref().map(Path::new).is_some_and(crate::metadata::is_audio_file)
     }
 
     pub fn notify(&mut self, message: impl Into<String>) {
@@ -230,6 +243,14 @@ impl App {
         self.view_mode = ViewMode::Player; // Immediately switch to player view like VLC desktop
         self.overlay = Overlay::None;
         self.active_menu = None;
+
+        let path = Path::new(source);
+        if crate::metadata::is_audio_file(path) && path.is_file() {
+            self.audio_metadata = Some(crate::metadata::extract_metadata(path));
+        } else {
+            self.audio_metadata = None;
+        }
+
         self.sidecar = if source.contains("://") { None } else { SubtitleFile::discover(Path::new(source)) };
         self.sidecar_enabled = self.sidecar.is_some();
         self.subtitle_delay_ms = 0;
@@ -419,13 +440,23 @@ impl App {
 
     /// Handles both clipboard pasting and direct file/directory drag-and-drop.
     pub fn handle_drop_or_paste(&mut self, text: &str, player: &mut VlcPlayer) -> Result<()> {
-        let trimmed = text.trim().trim_matches('"').trim_matches('\'').trim();
+        let trimmed = text.trim()
+            .trim_start_matches('&')
+            .trim()
+            .trim_matches('"')
+            .trim_matches('\'')
+            .trim();
         if trimmed.is_empty() { return Ok(()); }
 
         if let Some(ref mut dialog) = self.input {
             let remaining = 4096_usize.saturating_sub(dialog.text.len());
             dialog.text.extend(trimmed.chars().filter(|c| !c.is_control()).take(remaining));
             return Ok(());
+        }
+
+        self.active_menu = None;
+        if self.overlay != Overlay::None {
+            self.overlay = Overlay::None;
         }
 
         let path = Path::new(trimmed);

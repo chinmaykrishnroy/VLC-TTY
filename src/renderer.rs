@@ -154,6 +154,55 @@ fn empty_welcome(f: &mut Frame, area: Rect) {
     f.render_widget(text, text_area);
 }
 
+fn render_audio_meta_banner(f: &mut Frame, app: &App, area: Rect) {
+    if area.width < 10 || area.height < 4 { return; }
+    let meta_rect = Rect::new(area.x, area.bottom().saturating_sub(3), area.width, 3);
+    f.render_widget(Clear, meta_rect);
+    let title = app.audio_metadata.as_ref().and_then(|m| m.title.as_deref())
+        .or_else(|| app.current.as_deref().and_then(|c| c.rsplit(['/', '\\']).next()))
+        .unwrap_or("Audio Track");
+    let artist = app.audio_metadata.as_ref().and_then(|m| m.artist.as_deref()).unwrap_or("Unknown Artist");
+    let album = app.audio_metadata.as_ref().and_then(|m| m.album.as_deref()).unwrap_or("Unknown Album");
+    let meta_text = Paragraph::new(vec![
+        Line::styled(format!(" {} ", short(title, area.width.saturating_sub(4) as usize)), Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
+        Line::styled(format!(" {}  -  {} ", short(artist, (area.width.saturating_sub(10) / 2) as usize), short(album, (area.width.saturating_sub(10) / 2) as usize)), Style::default().fg(PALE)),
+    ]).alignment(Alignment::Center).style(Style::default().bg(Color::Rgb(16, 18, 22)));
+    f.render_widget(meta_text, meta_rect);
+}
+
+fn render_audio_card(f: &mut Frame, app: &App, info: &PlaybackSnapshot, area: Rect) {
+    if area.width < 10 || area.height < 4 { return; }
+    f.render_widget(Block::default().style(Style::default().bg(BG_DARK)), area);
+
+    let title = app.audio_metadata.as_ref().and_then(|m| m.title.as_deref())
+        .or_else(|| app.current.as_deref().and_then(|c| c.rsplit(['/', '\\']).next()))
+        .unwrap_or("Audio Track");
+    let artist = app.audio_metadata.as_ref().and_then(|m| m.artist.as_deref()).unwrap_or("Unknown Artist");
+    let album = app.audio_metadata.as_ref().and_then(|m| m.album.as_deref()).unwrap_or("Unknown Album");
+
+    let card_w = 54.min(area.width.saturating_sub(4));
+    let card_h = 9.min(area.height.saturating_sub(2));
+    let card_rect = centered(area, card_w, card_h);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(CYAN))
+        .style(Style::default().bg(Color::Rgb(24, 28, 34)));
+    let inner = block.inner(card_rect);
+    f.render_widget(block, card_rect);
+
+    let lines = vec![
+        Line::styled(" [AUDIO PLAYBACK] ", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
+        Line::raw(""),
+        Line::styled(short(title, inner.width as usize), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+        Line::styled(format!("Artist: {}", short(artist, inner.width.saturating_sub(8) as usize)), Style::default().fg(PALE)),
+        Line::styled(format!("Album:  {}", short(album, inner.width.saturating_sub(8) as usize)), Style::default().fg(DIM)),
+        Line::raw(""),
+        Line::styled(format!("Time: {} / {}   State: {}", time(info.time_ms), time(info.length_ms), state_label(info.state)), Style::default().fg(CYAN)),
+    ];
+    f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), inner);
+}
+
 fn video(f: &mut Frame, image: Option<&VideoFrame>, graphics: &mut GraphicsRenderer, area: Rect, has_overlay: bool) {
     if area.width == 0 || area.height == 0 { return; }
     f.render_widget(Block::default().style(Style::default().bg(Color::Black)), area);
@@ -441,13 +490,20 @@ pub fn draw(
         zones.back = Some(Rect::new(screen.x, screen.y, 16.min(screen.width), 1));
 
         if image.is_some() && !native_window {
-            let picture_area = if app.sidecar_enabled && !graphics.is_ansi() {
+            let picture_area = if app.is_audio() {
+                Rect::new(video_area.x, video_area.y, video_area.width, video_area.height.saturating_sub(3))
+            } else if app.sidecar_enabled && !graphics.is_ansi() {
                 Rect::new(video_area.x, video_area.y, video_area.width, video_area.height.saturating_sub(3))
             } else { video_area };
             video(f, image, graphics, picture_area, has_active_popup);
+            if app.is_audio() && video_area.height >= 6 {
+                render_audio_meta_banner(f, app, video_area);
+            }
         } else if native_window {
             f.render_widget(Paragraph::new("Native VLC window mode\nVideo is displayed in separate VLC window.")
                 .alignment(Alignment::Center).style(Style::default().fg(DIM)), video_area);
+        } else if app.is_audio() {
+            render_audio_card(f, app, info, video_area);
         } else {
             empty_welcome(f, video_area);
         }
@@ -510,14 +566,21 @@ pub fn draw(
         zones.video = Some(video_area);
 
         if image.is_some() && !native_window {
-            let picture_area = if app.sidecar_enabled && !graphics.is_ansi() {
+            let picture_area = if app.is_audio() {
+                Rect::new(video_area.x, video_area.y, video_area.width, video_area.height.saturating_sub(3))
+            } else if app.sidecar_enabled && !graphics.is_ansi() {
                 Rect::new(video_area.x, video_area.y, video_area.width, video_area.height.saturating_sub(3))
             } else { video_area };
             video(f, image, graphics, picture_area, has_active_popup);
+            if app.is_audio() && video_area.height >= 6 {
+                render_audio_meta_banner(f, app, video_area);
+            }
         } else if native_window {
             f.render_widget(Block::default().style(Style::default().bg(BG_DARK)), video_area);
             f.render_widget(Paragraph::new("Native VLC window mode active\nVideo rendered with GPU acceleration.\nTUI controls remain active.")
                 .alignment(Alignment::Center).style(Style::default().fg(DIM)), video_area);
+        } else if app.is_audio() {
+            render_audio_card(f, app, info, video_area);
         } else if app.current.is_none() {
             empty_welcome(f, video_area);
         } else {
@@ -612,23 +675,31 @@ pub fn draw(
         zones.audio = Some(au_rect);
         x += 8;
 
-        // Volume text slider on the right
-        let vol_w = 24.min(bar.width.saturating_sub(x + 1));
-        if vol_w >= 8 {
+        // Volume TUI Slider widget on the right
+        let vol_w = 26.min(bar.width.saturating_sub(x + 1));
+        if vol_w >= 10 {
             let vol_x = bar.right().saturating_sub(vol_w);
-            let vol_rect = Rect::new(vol_x, bar.y, vol_w, 1);
+            let vol_container = Rect::new(vol_x, bar.y, vol_w, 1);
             let vol_pct = info.volume.clamp(0, 125);
             let vol_ratio = (vol_pct as f64 / 125.0).clamp(0.0, 1.0);
-            let bar_len = vol_w.saturating_sub(10) as usize;
-            let filled = ((vol_ratio * bar_len as f64).round() as usize).min(bar_len);
-            let empty = bar_len.saturating_sub(filled);
-            let bar_str = if bar_len >= 3 {
-                format!("Vol: [{}|{}] {:>3}%", "=".repeat(filled), "-".repeat(empty), vol_pct)
-            } else {
-                format!("Vol: {:>3}%", vol_pct)
-            };
-            f.render_widget(Paragraph::new(bar_str).style(Style::default().fg(CYAN).bg(BAR_BG)), vol_rect);
-            zones.volume = Some(vol_rect);
+
+            // Split into "Vol " (4 cols), Slider Gauge (remaining cols), " 100%" (5 cols)
+            let vol_layout = Layout::default().direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Length(4),
+                    Constraint::Min(4),
+                    Constraint::Length(5),
+                ])
+                .split(vol_container);
+
+            f.render_widget(Paragraph::new("Vol ").style(Style::default().fg(PALE).bg(BAR_BG)), vol_layout[0]);
+            let vol_gauge = Gauge::default()
+                .gauge_style(Style::default().fg(CYAN).bg(Color::Rgb(48, 54, 64)))
+                .ratio(vol_ratio)
+                .label("");
+            f.render_widget(vol_gauge, vol_layout[1]);
+            f.render_widget(Paragraph::new(format!("{:>4}%", vol_pct)).style(Style::default().fg(CYAN).bg(BAR_BG)), vol_layout[2]);
+            zones.volume = Some(vol_container);
         }
 
         // 5. Status & notification bar
