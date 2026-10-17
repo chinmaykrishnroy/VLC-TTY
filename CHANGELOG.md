@@ -6,6 +6,7 @@
 - Add silent SSH defaults, bounded decode height/FPS, runtime diagnostics and a terminal-free decoding smoke command.
 - Replace queued graphics work with latest-frame mailboxes; reject stale results across media/layout changes and reuse one owned Kitty image ID.
 - Correct tmux Sixel escaping, reserve text-caption space and reject overflowing subtitle timestamps.
+- Avoid blocking cursor-position queries during fullscreen, popup and resize redraws; require an actual Unix PTY control regression in CI.
 - Add six-target native CI, required LibVLC decode checks, application archives with notices/checksums and a gated tag-release workflow.
 - Remove unused still-image codecs from the terminal graphics dependency tree and apply consistent Rust formatting.
 

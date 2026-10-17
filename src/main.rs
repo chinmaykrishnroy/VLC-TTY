@@ -99,6 +99,16 @@ fn smoke_test(player: &mut VlcPlayer, source: &str) -> Result<()> {
 }
 /// Restore raw mode, mouse and alternate screen on any return path, including errors.
 struct TerminalGuard;
+/// Ratatui's clear() preserves the cursor by querying the terminal. On a remote
+/// terminal without cursor-report replies that query times out and consumes input.
+/// Resizing our fullscreen viewport to its current size resets its buffers and
+/// clears it without a cursor query; the next draw supplies the complete screen.
+fn reset_fullscreen<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+) -> std::result::Result<(), B::Error> {
+    let area = terminal.size()?.into();
+    terminal.resize(area)
+}
 struct SynchronizedUpdate;
 impl SynchronizedUpdate {
     fn enter() -> io::Result<Self> {
@@ -256,7 +266,7 @@ fn run() -> Result<()> {
             {
                 for event in events {
                     if matches!(event, Event::Resize(_, _)) {
-                        terminal.clear()?;
+                        reset_fullscreen(&mut terminal)?;
                         graphics.invalidate();
                     }
                     match app.handle_event(event, &zones, &mut player)? {
@@ -264,7 +274,7 @@ fn run() -> Result<()> {
                         app::AppEffect::ToggleRenderer => {
                             graphics.toggle_ansi();
                             app.notify(format!("Video renderer: {}", graphics.label()));
-                            terminal.clear()?;
+                            reset_fullscreen(&mut terminal)?;
                             graphics.invalidate();
                         }
                         app::AppEffect::Continue => {}
@@ -282,7 +292,7 @@ fn run() -> Result<()> {
             app.sidecar_enabled,
         );
         if previous_presentation != presentation {
-            terminal.clear()?;
+            reset_fullscreen(&mut terminal)?;
             graphics.invalidate();
             previous_presentation = presentation;
         }

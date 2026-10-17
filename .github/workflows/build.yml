@@ -96,3 +96,5 @@ jobs:
           unset DISPLAY WAYLAND_DISPLAY
           cargo test --locked --all-targets -- --ignored --test-threads=1 --nocapture
           cargo run --locked -- --ssh --smoke-test samples/sample.mp4
+      - name: Exercise real terminal controls without cursor-report replies
+        run: python3 scripts/pty_smoke.py target/debug/vlc-tty samples/sample.mp4 --expect-caption TermVLC

@@ -32,6 +32,15 @@ cargo test --locked --all-targets -- --ignored --test-threads=1 --nocapture
 
 These tests require decoded video frames and advancing playback time from a file and a loopback HTTP server. They check pause, frame stepping, seeking, stop, timing controls and silent playback without a sound device. They fail when LibVLC cannot load. Run them serially because native runtime initialization uses process-wide environment configuration.
 
+On Unix, exercise the actual TUI and input loop in a pseudo-terminal:
+
+```sh
+cargo build --locked
+python3 scripts/pty_smoke.py target/debug/vlc-tty samples/sample.mp4 --expect-caption TermVLC
+```
+
+This checks ANSI output, captions, pause, help, queue, reopen/resize and terminal restoration without answering cursor-position queries. It is not a visual test or a terminal-emulator compatibility certificate. The Ubuntu Server CI lane requires it.
+
 ## Packaging
 
 Python 3.11+ is needed for release tooling. Build with an explicit target, then package and verify:
