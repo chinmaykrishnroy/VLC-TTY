@@ -422,6 +422,9 @@ fn libvlc_candidates() -> Vec<PathBuf> {
             names.push(dir.join("VLC.app/Contents/MacOS/lib/libvlc.dylib"));
         }
     }
+    if env::var_os("VLC_TTY_STRICT_RUNTIME").as_deref() == Some(std::ffi::OsStr::new("1")) {
+        return names;
+    }
     #[cfg(windows)]
     {
         for var in ["ProgramFiles", "ProgramFiles(x86)"] {

@@ -110,6 +110,9 @@ impl Options {
                 }
             }
         }
+        if out.help || out.version {
+            return Ok(out);
+        }
         out.fps = fps.unwrap_or(if out.ssh { 15 } else { 60 });
         out.decode_height = match decode {
             Some(height) => height,
@@ -146,6 +149,12 @@ impl Options {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn help_and_version_ignore_invalid_runtime_environment() {
+        for flag in ["--help", "-h", "--version", "-V"] {
+            assert!(Options::parse([flag.to_owned()], true, Some("bad height")).is_ok());
+        }
+    }
     fn parse(args: &[&str], remote: bool) -> Result<Options> {
         Options::parse(args.iter().map(|arg| arg.to_string()), remote, None)
     }

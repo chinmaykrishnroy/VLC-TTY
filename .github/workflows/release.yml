@@ -32,14 +32,14 @@ jobs:
           pattern: vlc-tty-*
           path: dist
           merge-multiple: true
-      - name: Verify all six archives and aggregate checksums
+      - name: Verify six standalone executables and source companions
         run: python3 scripts/release_manifest.py dist
-      - name: Publish verified application archives
+      - name: Publish standalone executables and source companions
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          gh release create "$RELEASE_TAG" dist/*.zip dist/*.tar.gz dist/SHA256SUMS \
+          gh release create "$RELEASE_TAG" dist/* \
             --verify-tag --title "VLC-TTY $RELEASE_TAG" --generate-notes \
-            --notes 'Application-only executables for six native targets. Install matching LibVLC 3 libraries and plugins separately; see README and SSH guide. Pi 5 and terminal visual acceptance remain separate from automated decoding checks.'
+            --notes 'Single-file portable executables with embedded LibVLC for six native targets. Choose the correct OS/CPU architecture. Runtime licenses and source companions are included alongside the executables; no installer or separate VLC installation is required. See RELEASE.md for base-OS requirements and remaining visual/device acceptance.'

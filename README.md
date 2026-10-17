@@ -12,7 +12,7 @@
 
 **VLC-TTY plays video inside your terminal**, with familiar VLC controls powered by LibVLC. Browse files, manage playback and watch through terminal graphics — including silent playback on a headless server over SSH.
 
-> Development preview. A compatible terminal and an installed LibVLC 3 runtime are required. Pi 5 headless decoding and ANSI controls have been tested; pixel-protocol visual acceptance and long sessions remain open. See [validation](VALIDATION.md).
+> Development preview. Portable builds embed LibVLC 3; source builds use an installed runtime. A compatible terminal is required. Pi 5 headless decoding and ANSI controls have been tested; pixel-protocol visual acceptance and long sessions remain open. See [validation](VALIDATION.md).
 
 ## Features
 
@@ -26,15 +26,11 @@
 
 ## Get started
 
-Application archives are built for **Linux, Windows and macOS**, on **x64 and ARM64**. Download a matching archive from [Releases](https://github.com/chinmaykrishnroy/VLC-TTY/releases) when available, extract it, and put the executable in your PATH. These archives contain the application; install the media runtime separately.
+Portable builds target **Linux, Windows and macOS**, on **x64 and ARM64**, starting at **v0.0.1**. Each download is one executable with LibVLC and its plugins embedded; there is no installer or separate VLC installation. The runtime is extracted privately while the app runs. Linux requires glibc 2.39+ (Ubuntu 24.04 or newer).
 
-Before the first tagged release, download build artifacts from a successful [CI run](https://github.com/chinmaykrishnroy/VLC-TTY/actions/workflows/ci.yml).
+Choose **windows-x64** for Intel/AMD PCs, **windows-arm64** for ARM Windows devices, and **linux-arm64** for a 64-bit Raspberry Pi. Windows ARM64 files cannot run on Windows x64.
 
-| OS | Runtime setup |
-| --- | --- |
-| Ubuntu / Debian | `sudo apt-get install --no-install-recommends libvlc5 vlc-plugin-base` |
-| Windows | Install matching-architecture VLC 3.x from [VideoLAN](https://www.videolan.org/vlc/); set `VLC_HOME` if it is outside the usual location. |
-| macOS | Install matching-architecture VLC 3.x in `/Applications/VLC.app`, or set `VLC_HOME` to your app bundle. |
+Get verified files from [Releases](https://github.com/chinmaykrishnroy/VLC-TTY/releases) when available, or from a successful [CI run](https://github.com/chinmaykrishnroy/VLC-TTY/actions/workflows/ci.yml). Source/notice companions are provided alongside the executables; they are not needed for ordinary playback. See [release details](RELEASE.md).
 
 ```sh
 vlc-tty /path/to/movie.mp4
@@ -47,7 +43,7 @@ To build from source, install Rust stable and run `cargo build --locked --releas
 
 ## Watch over SSH
 
-On the server, install the runtime and matching Linux executable. Then launch from your local terminal:
+On the server, copy the matching Linux portable executable and make it executable with `chmod +x`. Then launch from your local terminal:
 
 ```sh
 ssh -t user@pi 'vlc-tty --ssh --silent /path/to/movie.mp4'
@@ -83,7 +79,7 @@ Mouse controls and menus are available where terminal mouse reporting is support
 
 ## Documentation
 
-[SSH guide](docs/SSH.md) · [Building](BUILDING.md) · [Architecture](ARCHITECTURE.md) · [Objective](OBJECTIVE.md) · [Roadmap](ROADMAP.md) · [Releasing](RELEASING.md) · [Validation](VALIDATION.md) · [Pi 5 results](docs/PI5-VALIDATION.md) · [Changelog](CHANGELOG.md)
+[SSH guide](docs/SSH.md) · [Building](BUILDING.md) · [Architecture](ARCHITECTURE.md) · [Objective](OBJECTIVE.md) · [Roadmap](ROADMAP.md) · [Releasing](RELEASE.md) - [Contributing](CONTRIBUTING.md) · [Validation](VALIDATION.md) · [Pi 5 results](docs/PI5-VALIDATION.md) · [Changelog](CHANGELOG.md)
 
 ## Contributing
 
@@ -93,4 +89,4 @@ Before submitting changes, run formatting, unit tests and strict Clippy as descr
 
 ## License
 
-Application code is [MIT licensed](LICENSE). LibVLC and its plugins have their own licenses. VLC-TTY is an independent project and is not affiliated with VideoLAN. The terminal-cone SVG is original project artwork inspired by the familiar media-player traffic cone.
+Application code is [MIT licensed](LICENSE). Bundled LibVLC, plugins and codecs retain their own licenses; the portable distribution is not MIT-only. Runtime source and notice companions accompany releases. VLC-TTY is an independent project and is not affiliated with VideoLAN. The terminal-cone SVG is original project artwork inspired by the familiar media-player traffic cone.

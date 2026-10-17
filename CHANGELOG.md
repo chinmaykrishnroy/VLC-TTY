@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.1 (first public version, in development)
+
+- Start public semantic versioning at 0.0.1; earlier numbers describe prototype checkpoints.
+- Add portable self-extracting executables with embedded LibVLC and full help.
+- Validate executable CPU architecture before native smoke tests.
+- Add contributor and release documentation.
+
+
 ## 0.6.0 (development)
 
 - Rename application and executable to VLC-TTY; add original terminal-cone SVG and focused product documentation.

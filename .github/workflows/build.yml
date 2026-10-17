@@ -8,12 +8,13 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  PYTHONUTF8: '1'
 
 jobs:
   native:
     name: ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 40
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -58,20 +59,16 @@ jobs:
         run: python scripts/ci_install_vlc.py ${{ matrix.target }}
       - name: Require real file and HTTP decoding, controls and silent mode
         run: cargo test --locked --all-targets -- --ignored --test-threads=1 --nocapture
-      - name: Release executable
-        run: cargo build --locked --release
-      - name: Package application and dependency notices
-        run: python scripts/package_release.py ${{ matrix.target }}
-      - name: Verify extracted executable without a display
+      - name: Build standalone executable with matching runtime and sources
+        run: python scripts/build_portable.py ${{ matrix.target }} --with-sources
+      - name: Verify the single file without installed-runtime paths
+        run: python scripts/verify_portable.py --target ${{ matrix.target }}
+      - name: Require decoding in a container with no VLC packages
+        if: runner.os == 'Linux'
         shell: bash
         env:
           RELEASE_TARGET: ${{ matrix.target }}
-        run: |
-          for archive in dist/*.zip dist/*.tar.gz; do
-            if [ -f "$archive" ]; then
-              python scripts/verify_package.py "$archive" "$RELEASE_TARGET"
-            fi
-          done
+        run: python scripts/container_smoke.py "$RELEASE_TARGET"
       - uses: actions/upload-artifact@v7
         with:
           name: vlc-tty-${{ matrix.target }}
@@ -98,3 +95,20 @@ jobs:
           cargo run --locked -- --ssh --smoke-test samples/sample.mp4
       - name: Exercise real terminal controls without cursor-report replies
         run: python3 scripts/pty_smoke.py target/debug/vlc-tty samples/sample.mp4 --expect-caption TermVLC
+
+  runtime-sources:
+    name: Preserve VLC and contributed dependency sources
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Collect verified upstream sources
+        run: python3 scripts/collect_sources.py --upstream dist/vlc-3.0.24-source-snapshot.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vlc-tty-runtime-sources
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14

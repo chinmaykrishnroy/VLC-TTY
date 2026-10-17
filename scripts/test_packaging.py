@@ -7,6 +7,7 @@ import zipfile
 import tarfile
 from package_release import create_archive, digest, package, ROOT, TARGETS
 from release_manifest import manifest
+from build_portable import LABELS
 from verify_package import verify_documentation
 
 
@@ -62,14 +63,19 @@ class PackagingTests(unittest.TestCase):
         version = tomllib.loads((ROOT / "Cargo.toml").read_text())["package"]["version"]
         with tempfile.TemporaryDirectory() as temporary, patch.dict("os.environ", {"GITHUB_REF": f"refs/tags/v{version}"}):
             directory = Path(temporary)
-            with self.assertRaisesRegex(ValueError, "Wrong release archive set"):
+            with self.assertRaisesRegex(ValueError, "Wrong release executable set"):
                 manifest(directory)
             for target in TARGETS:
-                path = directory / (f"vlc-tty-{version}-{target}" + (".zip" if "windows" in target else ".tar.gz"))
+                path = directory / (f"vlc-tty-{version}-{LABELS[target]}" + (".exe" if "windows" in target else ""))
                 path.write_bytes(target.encode())
                 path.with_name(path.name + ".sha256").write_text(f"{digest(path)}  {path.name}\n")
+                (directory / (path.name + ".json")).write_text(json.dumps({"target": target, "runtime_included": True,
+                    "source_dirty": False, "runtime": {"source_companion": {"file": "vlc-3.0.24-source-snapshot.tar.gz"}}}))
+            (directory / "vlc-3.0.24-source-snapshot.tar.gz").write_bytes(b"test source companion")
+            source = directory / "vlc-3.0.24-source-snapshot.tar.gz"
+            source.with_name(source.name + ".sha256").write_text(f"{digest(source)}  {source.name}\n")
             manifest(directory)
-            self.assertEqual(len((directory / "SHA256SUMS").read_text().splitlines()), 6)
+            self.assertEqual(len((directory / "SHA256SUMS").read_text().splitlines()), 7)
             path.write_bytes(b"corrupted archive")
             with self.assertRaisesRegex(ValueError, "Checksum mismatch"):
                 manifest(directory)

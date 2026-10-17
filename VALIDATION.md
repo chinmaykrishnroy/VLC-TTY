@@ -1,5 +1,15 @@
 # Validation — 17 October 2026
 
+## 0.0.1 portable work
+
+The reported Windows failure was reproduced from the exact downloaded ARM64 executable (`PE machine 0xAA64`) on Windows x64. Windows rejected the incompatible architecture; the matching x64 source executable launched and decoded video. Portable release names now use explicit `windows-x64` and `windows-arm64` labels, and packaging inspects native file headers.
+
+The Windows x64 standalone development build passed matching `-h`/`--help`, version/bundle identity, two concurrent runtime loads, actual silent decoding, normal-exit extraction cleanup, explicit extraction and documentation checks. Its LibVLC loaded from private extraction paths while external runtime paths were deliberately invalid. A regression also requires an invalid replacement runtime to fail instead of silently falling back to installed VLC.
+
+60 application tests plus the launcher integrity test passed locally. Multi-platform standalone/source-companion CI is being validated; the successful seven-job run below is evidence for the earlier thin-application milestone, not proof of the new packaging.
+
+## Earlier thin-application milestone
+
 ## Verified locally on Windows x64
 
 - LibVLC 3.0.24 loads from the installed VideoLAN runtime.

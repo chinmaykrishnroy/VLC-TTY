@@ -4,7 +4,9 @@ The server decodes media and sends terminal graphics to your SSH client. It need
 
 ## Ubuntu Server / Raspberry Pi 5
 
-Use the Linux ARM64 build on a 64-bit Ubuntu installation. Install the runtime without a desktop:
+Use the Linux ARM64 portable build on a 64-bit Ubuntu installation. Copy the single file to the server, run `chmod +x vlc-tty`, and put it in your PATH. Portable builds embed the runtime and need no separate VLC installation. The release baseline is Ubuntu 24.04 / glibc 2.39 or newer.
+
+For a thin source build, install the runtime without a desktop:
 
 ```sh
 sudo apt-get update

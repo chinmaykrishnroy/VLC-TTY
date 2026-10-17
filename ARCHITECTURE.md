@@ -21,4 +21,6 @@ On macOS, preload the sibling `libvlccore.dylib` before LibVLC and retain both h
 
 `src/options.rs` resolves flags and SSH defaults before decoder/terminal initialization. `--ssh` selects silent audio, 15 FPS and a 720p callback cap; explicit flags override those defaults. Local defaults are 60 FPS and a 1080p cap. `--doctor` and `--smoke-test` work without a TTY.
 
-Native CI builds six OS/architecture targets, installs coherent LibVLC runtimes for tests and packages the application separately. No VLC runtime is redistributed in application archives. See [building](BUILDING.md), [releasing](RELEASING.md) and [platform research](docs/release-platform-research.md).
+The portable launcher embeds a compressed player/runtime payload, validates its digest, extracts to a fresh private temporary directory and launches a child with the runtime paths set before its loader initializes. Normal exit removes the directory. An explicit replacement-runtime override is retained; strict runtime discovery prevents a broken bundle from silently using a system VLC installation.
+
+Native CI builds six OS/architecture targets and verifies actual decoding from the standalone files. Linux also decodes in a base container without VLC packages. Distribution includes component notices, runtime provenance, checksums and source companions. See [building](BUILDING.md), [releasing](RELEASE.md) and [standalone research](docs/standalone-research.md).

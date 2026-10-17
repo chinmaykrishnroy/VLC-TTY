@@ -1,6 +1,7 @@
 mod app;
 mod dialogs;
 mod graphics;
+mod help;
 mod input;
 mod latest;
 mod metadata;
@@ -42,30 +43,7 @@ use std::{
 use crate::options::Options;
 
 fn usage() {
-    println!(
-        "VLC-TTY {} — video playback inside your terminal\n\n\
-Usage: vlc-tty [OPTIONS] [FILE|FOLDER|URL]\n\n\
-  --ssh                 SSH profile: silent, 15 FPS, 720p callback buffers\n\
-  --silent              Disable audio; no sound device or desktop required\n\
-  --audio               Play sound on the machine running VLC-TTY\n\
-  --graphics MODE       auto|kitty|sixel|iterm2|ansi (default auto)\n\
-  --fps N               Encoding/drawing limit, 1–120\n\
-  --decode-height N     Callback height cap, 0 = uncapped (max 4320)\n\
-  --subtitle PATH       External subtitle file\n\
-  --native-window       Optional separate video window (local desktop only)\n\
-  --doctor              Runtime/session diagnostics without opening the TUI\n\
-  --smoke-test MEDIA    Silent headless decoding check, no terminal required\n\
-  -V, --version         Show version\n\
-  -h, --help            Show help\n\n\
-SSH sessions are detected automatically. Explicit flags override profile defaults.\n\
-Use ssh -t when launching the player as a remote command. Your client terminal\n\
-must support Kitty/Sixel/iTerm2 for pixels; ANSI half-block fallback is available.\n\n\
-Controls: Space play/pause; s stop; f fullscreen; arrows seek; +/- volume;\n\
-Shift+S subtitles; Shift+A audio tracks; l load captions; ,/. subtitle delay;\n\
-j/k audio delay; n/p next/previous; Tab queue; g renderer; o open; q quit.\n\n\
-Requires LibVLC 3.x and its plugins. --silent does not forward sound over SSH.",
-        env!("CARGO_PKG_VERSION")
-    );
+    help::print(false);
 }
 
 fn smoke_test(player: &mut VlcPlayer, source: &str) -> Result<()> {

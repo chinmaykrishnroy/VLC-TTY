@@ -48,10 +48,19 @@ Python 3.11+ is needed for release tooling. Build with an explicit target, then 
 ```sh
 cargo build --locked --release --target aarch64-unknown-linux-gnu
 python3 scripts/package_release.py aarch64-unknown-linux-gnu
-python3 scripts/verify_package.py dist/vlc-tty-0.6.0-aarch64-unknown-linux-gnu.tar.gz aarch64-unknown-linux-gnu
+python3 scripts/verify_package.py dist/vlc-tty-0.0.1-aarch64-unknown-linux-gnu.tar.gz aarch64-unknown-linux-gnu
 python3 -m unittest discover -s scripts -p 'test_*.py' -v
 ```
 
 The verification command runs the extracted executable, so use a host capable of executing that target. Packaging records Cargo metadata and copies dependency notices from the local Cargo registry. It fails if a dependency has no discoverable license text.
+
+For a portable executable, build on the matching native OS/CPU:
+
+```sh
+python3 scripts/build_portable.py aarch64-unknown-linux-gnu --with-sources
+python3 scripts/verify_portable.py --target aarch64-unknown-linux-gnu
+```
+
+On Windows/macOS, set `VLC_HOME` to the complete matching runtime installed by `scripts/ci_install_vlc.py`, or pass `--runtime-home`. On Linux, the collector uses installed LibVLC base packages and their shared-library closure. `--with-sources` preserves exact Ubuntu source package versions; Windows/macOS builds reference the upstream source-snapshot companion. CI collects that snapshot separately. See [RELEASE.md](RELEASE.md) for the portable format and OS baseline.
 
 See [release process](RELEASING.md) for the complete native target matrix and [SSH guide](docs/SSH.md) for headless setup. Real rendering, network performance and physical-device behavior require terminal/device checks beyond the automated suite.
