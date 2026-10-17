@@ -117,13 +117,15 @@ impl Transport {
                                 && !state.1
                                 && !s.load(Ordering::Acquire)
                             {
+                                let mut data = packet.data[..packet.len].to_vec();
+                                c.apply_volume(&mut data);
                                 protocol::write(
                                     &mut output,
                                     &Message::Samples {
                                         generation: packet.generation,
                                         pts: packet.pts,
                                         lead_us: packet.pts.saturating_sub(unsafe { clock() }),
-                                        data: packet.data[..packet.len].to_vec(),
+                                        data,
                                     },
                                 )
                             } else {

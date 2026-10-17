@@ -107,6 +107,8 @@ def run(args):
                 command = shlex.join(["python3", args.remote_driver, args.remote_binary, args.remote_media,
                                       "--duration", str(args.duration), "--repeat", "all", "--audio-endpoint", f"127.0.0.1:{remote_port}",
                                       "--audio-token-file", remote_key, "--metrics", profile])
+                if args.steady_audio:
+                    command += " --steady-audio"
                 result = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-R",
                                          f"127.0.0.1:{remote_port}:127.0.0.1:{port}", "--", args.ssh_host, command],
                                         capture_output=True, text=True, encoding="utf-8", timeout=args.duration+45)
@@ -141,6 +143,7 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--duration", type=float, default=5)
     parser.add_argument("--ssh-host")
+    parser.add_argument("--steady-audio", action="store_true")
     parser.add_argument("--remote-binary")
     parser.add_argument("--remote-media")
     parser.add_argument("--remote-driver", help="absolute server path to scripts/pty_smoke.py")

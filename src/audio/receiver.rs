@@ -16,12 +16,49 @@ use std::{
     time::{Duration, Instant},
 };
 
+const POOL_BLOCKS: usize = 128;
+const MAX_QUEUED_FRAMES: u64 = 36_000; // 750 ms at 48 kHz, plus the active block.
+const JITTER_ALLOWANCE_US: i64 = 400_000;
+
 struct Block {
     generation: u64,
     pts: i64,
     due: Instant,
     len: usize,
     data: [i16; MAX_SAMPLES],
+}
+#[derive(Default)]
+struct Timeline {
+    anchor: Option<(u64, i64, Instant)>,
+}
+impl Timeline {
+    fn due(&mut self, generation: u64, pts: i64, lead_us: i64, arrived: Instant) -> Instant {
+        if let Some((active, origin_pts, origin)) = self.anchor {
+            let delta = pts.saturating_sub(origin_pts);
+            let due = if delta >= 0 {
+                origin.checked_add(Duration::from_micros(delta as u64))
+            } else {
+                origin.checked_sub(Duration::from_micros(delta.unsigned_abs()))
+            };
+            if let Some(due) = due.filter(|due| {
+                active == generation
+                    && arrived.saturating_duration_since(*due) < Duration::from_millis(150)
+                    && due.saturating_duration_since(arrived) < Duration::from_secs(1)
+            }) {
+                return due;
+            }
+        }
+        // Anchor once per playback generation, not once per arriving packet.
+        // Contiguous PTS stays contiguous despite variable SSH delivery times.
+        let due = arrived
+            + Duration::from_micros(
+                lead_us
+                    .saturating_add(JITTER_ALLOWANCE_US)
+                    .clamp(0, 1_000_000) as u64,
+            );
+        self.anchor = Some((generation, pts, due));
+        due
+    }
 }
 struct Buffer {
     free: ArrayQueue<Box<Block>>,
@@ -39,8 +76,8 @@ struct Buffer {
 }
 impl Buffer {
     fn new() -> Self {
-        let free = ArrayQueue::new(32);
-        for _ in 0..32 {
+        let free = ArrayQueue::new(POOL_BLOCKS);
+        for _ in 0..POOL_BLOCKS {
             let _ = free.push(Box::new(Block {
                 generation: 0,
                 pts: 0,
@@ -51,7 +88,7 @@ impl Buffer {
         }
         Self {
             free,
-            ready: ArrayQueue::new(32),
+            ready: ArrayQueue::new(POOL_BLOCKS),
             queued_frames: AtomicU64::new(0),
             current_frames: AtomicU64::new(0),
             generation: AtomicU64::new(0),
@@ -93,6 +130,7 @@ struct Output {
     rate: u32,
     channels: usize,
     waiting: bool,
+    playing_generation: u64,
 }
 impl Output {
     fn frame(&mut self, now: Instant) -> Option<[f32; 2]> {
@@ -101,8 +139,8 @@ impl Output {
             self.waiting = true;
             return None;
         }
-        // Each iteration consumes a block. There are at most 32 blocks.
-        for _ in 0..33 {
+        // Each iteration consumes a block from the fixed pool.
+        for _ in 0..=POOL_BLOCKS {
             let generation = self.buffer.generation.load(Ordering::Acquire);
             if self
                 .block
@@ -127,16 +165,21 @@ impl Output {
             }
             let due = block.due
                 + Duration::from_secs_f64(self.offset as f64 / 2.0 / protocol::RATE as f64);
-            if due > now + Duration::from_millis(2) {
+            if self.playing_generation != generation && due > now + Duration::from_millis(2) {
                 self.waiting = true;
                 return None;
             }
-            if now.saturating_duration_since(due) > Duration::from_millis(150) {
+            if self.playing_generation != generation
+                && now.saturating_duration_since(due) > Duration::from_millis(150)
+            {
                 let _ = self.buffer.free.push(self.block.take().unwrap());
                 self.offset = 0;
                 continue;
             }
             let index = self.offset;
+            // Once primed, the device clock consumes contiguous samples. A
+            // slightly early callback must not insert wall-clock-gated silence.
+            self.playing_generation = generation;
             let next = (index + 2).min(block.len - 2);
             let a = self.phase as f32;
             let result = [0, 1].map(|channel| {
@@ -177,7 +220,10 @@ impl Output {
         for (index, frame) in output.chunks_mut(self.channels).enumerate() {
             let sample = self.frame(now + Duration::from_secs_f64(index as f64 / self.rate as f64));
             underrun |= sample.is_none()
-                && !self.waiting
+                && (!self.waiting
+                    || self.buffer.consumed_generation.load(Ordering::Relaxed)
+                        == self.buffer.generation.load(Ordering::Acquire))
+                && !self.buffer.paused.load(Ordering::Acquire)
                 && self.buffer.generation.load(Ordering::Acquire) != 0;
             let [left, right] = sample.unwrap_or([0.0; 2]);
             for (channel, value) in frame.iter_mut().enumerate() {
@@ -221,6 +267,7 @@ fn device(buffer: Arc<Buffer>) -> Result<cpal::Stream> {
         rate: config.sample_rate.0,
         channels: config.channels as usize,
         waiting: false,
+        playing_generation: 0,
     };
     let error = move |_error| {
         buffer.failed.store(true, Ordering::Release);
@@ -409,6 +456,7 @@ fn serve(
         }
         let _ = feedback.shutdown(Shutdown::Both);
     });
+    let mut timeline = Timeline::default();
     let result = (|| -> Result<()> {
         loop {
             match protocol::read(&mut connection)? {
@@ -428,10 +476,10 @@ fn serve(
                     {
                         continue;
                     }
-                    // Bound retained audio to about 200 ms. Discard oldest work
+                    // Bound retained audio to about 750 ms. Discard oldest work
                     // after a transport stall instead of building an audio backlog.
                     while buffer.queued_frames.load(Ordering::Relaxed) + (data.len() / 2) as u64
-                        > 9600
+                        > MAX_QUEUED_FRAMES
                     {
                         if let Some(block) = buffer.pop() {
                             let _ = buffer.free.push(block);
@@ -442,10 +490,7 @@ fn serve(
                     };
                     block.generation = generation;
                     block.pts = pts;
-                    block.due = Instant::now()
-                        + Duration::from_micros(
-                            lead_us.saturating_add(100_000).clamp(0, 500_000) as u64
-                        );
+                    block.due = timeline.due(generation, pts, lead_us, Instant::now());
                     block.len = data.len();
                     block.data[..data.len()].copy_from_slice(&data);
                     buffer.push(block);
@@ -472,6 +517,89 @@ fn serve(
 mod tests {
     use super::*;
     #[test]
+    fn early_device_callback_does_not_silence_buffered_pcm() {
+        let buffer = Arc::new(Buffer::new());
+        buffer.generation.store(1, Ordering::Release);
+        let mut output = Output {
+            buffer: buffer.clone(),
+            block: None,
+            offset: 0,
+            phase: 0.0,
+            rate: 48_000,
+            channels: 2,
+            waiting: false,
+            playing_generation: 0,
+        };
+        let due = Instant::now();
+        let mut block = buffer.free.pop().unwrap();
+        block.generation = 1;
+        block.due = due;
+        block.pts = 1_000_000;
+        block.len = MAX_SAMPLES;
+        block.data.fill(1000);
+        buffer.push(block);
+        for index in 0..960 {
+            // The second device callback is invoked 3 ms early. Hardware still
+            // consumes these samples at 48 kHz; don't insert software silence.
+            let offset = if index < 480 { index } else { index - 144 };
+            assert!(
+                output
+                    .frame(due + Duration::from_secs_f64(offset as f64 / 48_000.0))
+                    .is_some(),
+                "Early device callback inserted silence at frame {index}"
+            );
+        }
+    }
+    #[test]
+    fn timeline_reanchors_after_seek_or_large_network_stall() {
+        let start = Instant::now();
+        let mut timeline = Timeline::default();
+        let first = timeline.due(1, 1_000_000, 0, start);
+        assert_eq!(
+            timeline.due(1, 1_020_000, 0, start + Duration::from_millis(28)),
+            first + Duration::from_millis(20)
+        );
+        let seek = timeline.due(2, 5_000_000, 0, start + Duration::from_secs(1));
+        assert_eq!(seek, start + Duration::from_millis(1400));
+        let stall = timeline.due(2, 5_020_000, 0, start + Duration::from_secs(3));
+        assert_eq!(stall, start + Duration::from_millis(3400));
+    }
+    #[test]
+    fn packet_arrival_jitter_does_not_insert_silence_between_contiguous_samples() {
+        let buffer = Arc::new(Buffer::new());
+        buffer.generation.store(1, Ordering::Release);
+        let mut output = Output {
+            buffer: buffer.clone(),
+            block: None,
+            offset: 0,
+            phase: 0.0,
+            rate: 48_000,
+            channels: 2,
+            waiting: false,
+            playing_generation: 0,
+        };
+        let mut timeline = Timeline::default();
+        let arrived = Instant::now();
+        let mut first_due = None;
+        for (index, delay_ms) in [(0, 0), (1, 28)] {
+            let mut block = buffer.free.pop().unwrap();
+            block.generation = 1;
+            block.pts = 1_000_000 + index * 20_000;
+            block.due = timeline.due(1, block.pts, 0, arrived + Duration::from_millis(delay_ms));
+            first_due.get_or_insert(block.due);
+            block.len = MAX_SAMPLES;
+            block.data.fill(1000);
+            buffer.push(block);
+        }
+        for frame in 0..1920 {
+            let now = first_due.unwrap() + Duration::from_secs_f64(frame as f64 / 48_000.0);
+            assert!(
+                output.frame(now).is_some(),
+                "Inserted silence at frame {frame} despite buffered PCM"
+            );
+        }
+    }
+    #[test]
     fn device_callback_silences_underruns_and_rejects_stale_audio() {
         let buffer = Arc::new(Buffer::new());
         let mut output = Output {
@@ -482,6 +610,7 @@ mod tests {
             rate: 48_000,
             channels: 2,
             waiting: false,
+            playing_generation: 0,
         };
         let mut data = [1.0f32; 8];
         output.fill(&mut data, Duration::ZERO);
@@ -495,6 +624,6 @@ mod tests {
         buffer.generation.store(2, Ordering::Release);
         output.fill(&mut data, Duration::ZERO);
         assert_eq!(data, [0.0; 8]);
-        assert_eq!(buffer.free.len(), 32);
+        assert_eq!(buffer.free.len(), POOL_BLOCKS);
     }
 }

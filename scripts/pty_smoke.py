@@ -9,7 +9,7 @@ import subprocess
 import time
 
 
-def smoke(binary, media, duration=12, expect_caption=None, audio_endpoint=None, audio_token_file=None, metrics=None, repeat="off"):
+def smoke(binary, media, duration=12, expect_caption=None, audio_endpoint=None, audio_token_file=None, metrics=None, repeat="off", steady_audio=False):
     import fcntl
     import pty
     import termios
@@ -88,25 +88,27 @@ def smoke(binary, media, duration=12, expect_caption=None, audio_endpoint=None, 
     try:
         # Startup notifications occupy the OSD for four seconds. Let them expire
         # before asserting the paused-state label rather than the notification.
-        collect(4.3)
-        send(b"f")                         # Fullscreen.
-        send(b" ")                         # Pause.
-        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 36, 120, 0, 0))
-        collect(0.3)                        # Force a complete paused redraw.
-        paused_was_visible = b"PAUSED" in captured
-        send(b"e")                         # Step while paused.
-        send(b" ")                         # Resume.
-        send(b"\x1b[C")                    # Seek forward.
-        send(b"?")                         # Help overlay.
-        help_was_visible = b"PLAYBACK CONTROLS" in captured
-        send(b"\x1b")                      # Close overlay.
-        send(b"f")                         # Return to normal layout.
-        send(b"\t")                        # Queue view.
-        queue_was_visible = b"PLAYBACK QUEUE" in captured
-        send(b"\t")
-        send(b"o")                         # Terminal file input, including over SSH.
-        send(str(media.resolve()).encode() + b"\r", 1)
-        fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
+        paused_was_visible = help_was_visible = queue_was_visible = False
+        if not steady_audio:
+            collect(4.3)
+            send(b"f")                         # Fullscreen.
+            send(b" ")                         # Pause.
+            fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 36, 120, 0, 0))
+            collect(0.3)                        # Force a complete paused redraw.
+            paused_was_visible = b"PAUSED" in captured
+            send(b"e")                         # Step while paused.
+            send(b" ")                         # Resume.
+            send(b"\x1b[C")                    # Seek forward.
+            send(b"?")                         # Help overlay.
+            help_was_visible = b"PLAYBACK CONTROLS" in captured
+            send(b"\x1b")                      # Close overlay.
+            send(b"f")                         # Return to normal layout.
+            send(b"\t")                        # Queue view.
+            queue_was_visible = b"PLAYBACK QUEUE" in captured
+            send(b"\t")
+            send(b"o")                         # Terminal file input, including over SSH.
+            send(str(media.resolve()).encode() + b"\r", 1)
+            fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 24, 80, 0, 0))
         collect(max(0.5, duration - (time.monotonic() - started)))
         elapsed = time.monotonic() - started
         os.write(master, b"q")
@@ -124,11 +126,23 @@ def smoke(binary, media, duration=12, expect_caption=None, audio_endpoint=None, 
         if metrics and metrics.exists():
             lines = metrics.read_text().splitlines()
             result["last_application_sample"] = json.loads(lines[-1]) if lines else None
+            if steady_audio:
+                samples = [json.loads(line) for line in lines]
+                steady = [s for s in samples if s["elapsed_ms"] >= 4000]
+                if len(steady) < 5:
+                    raise RuntimeError("Not enough steady audio measurements")
+                result["steady_underrun_callbacks"] = steady[-1]["audio_underrun_callbacks"] - steady[0]["audio_underrun_callbacks"]
+                result["steady_playback_progress_ms"] = steady[-1]["playback_ms"] - steady[0]["playback_ms"]
+                result["continuity_scope"] = "Receiver starvation/gaps after 4s startup; not microphone or speaker capture"
         if expect_caption:
             result["caption_present"] = caption_seen
         print(json.dumps(result, indent=2))
         checks = [code == 0, result["ansi_half_blocks"] > 0, paused_was_visible,
                   help_was_visible, queue_was_visible, result["alternate_screen_restored"]]
+        if steady_audio:
+            checks = [code == 0, restored, result.get("steady_underrun_callbacks") == 0,
+                      result.get("steady_playback_progress_ms", 0) > 4000,
+                      result.get("last_application_sample", {}).get("remote_audio") is True]
         if expect_caption:
             checks.append(result["caption_present"])
         if not all(checks):
@@ -156,7 +170,8 @@ if __name__ == "__main__":
     parser.add_argument("--metrics", type=Path)
     parser.add_argument("--audio-endpoint")
     parser.add_argument("--audio-token-file", type=Path)
+    parser.add_argument("--steady-audio", action="store_true", help="Check uninterrupted audio starvation after startup, without control changes")
     args = parser.parse_args()
     if bool(args.audio_endpoint) != bool(args.audio_token_file):
         parser.error("audio endpoint and token file are required together")
-    smoke(args.binary, args.media, args.duration, args.expect_caption, args.audio_endpoint, args.audio_token_file, args.metrics, args.repeat)
+    smoke(args.binary, args.media, args.duration, args.expect_caption, args.audio_endpoint, args.audio_token_file, args.metrics, args.repeat, args.steady_audio)

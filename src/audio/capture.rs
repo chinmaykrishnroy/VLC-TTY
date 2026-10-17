@@ -3,7 +3,7 @@ use super::protocol::MAX_SAMPLES;
 use crossbeam_queue::ArrayQueue;
 use std::{
     ffi::c_void,
-    sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU64, Ordering},
 };
 
 pub struct Packet {
@@ -20,6 +20,7 @@ pub struct Capture {
     pub dropped: AtomicU64,
     pub last_pts: AtomicI64,
     pub draining: AtomicBool,
+    pub volume: AtomicI32,
 }
 impl Capture {
     pub fn new() -> Self {
@@ -40,6 +41,7 @@ impl Capture {
             dropped: AtomicU64::new(0),
             last_pts: AtomicI64::new(0),
             draining: AtomicBool::new(false),
+            volume: AtomicI32::new(100),
         }
     }
     pub fn flush(&self) {
@@ -48,6 +50,17 @@ impl Capture {
     pub fn state(&self, paused: bool) {
         self.paused.store(paused, Ordering::Release);
         self.flush();
+    }
+    /// Gain is applied just before transmission, so queued decoder packets do
+    /// not retain an old volume or force a rebuffer on every volume keypress.
+    pub fn apply_volume(&self, samples: &mut [i16]) {
+        let volume = self.volume.load(Ordering::Acquire).clamp(0, 125);
+        if volume != 100 {
+            for sample in samples {
+                *sample = ((*sample as i32 * volume) / 100).clamp(i16::MIN as i32, i16::MAX as i32)
+                    as i16;
+            }
+        }
     }
 }
 pub unsafe extern "C" fn play(opaque: *mut c_void, samples: *const c_void, count: u32, pts: i64) {
@@ -98,6 +111,31 @@ pub unsafe extern "C" fn drain(opaque: *mut c_void) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn forwarded_volume_mutes_scales_and_clips_samples() {
+        let mut capture = Capture::new();
+        let samples = [i16::MAX, i16::MIN, 10_000, -10_000];
+        for (volume, expected) in [
+            (0, [0; 4]),
+            (50, [16383, -16384, 5000, -5000]),
+            (100, samples),
+            (125, [i16::MAX, i16::MIN, 12500, -12500]),
+        ] {
+            capture.volume.store(volume, Ordering::Release);
+            unsafe {
+                play(
+                    (&mut capture as *mut Capture).cast(),
+                    samples.as_ptr().cast(),
+                    2,
+                    42,
+                )
+            };
+            let mut packet = capture.ready.pop().unwrap();
+            capture.apply_volume(&mut packet.data[..packet.len]);
+            assert_eq!(&packet.data[..4], &expected);
+            capture.free.push(packet).ok().unwrap();
+        }
+    }
     #[test]
     fn callback_pool_is_bounded_and_old_generations_are_identifiable() {
         let mut capture = Capture::new();

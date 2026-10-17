@@ -800,6 +800,13 @@ impl VlcPlayer {
         }
     }
     pub fn set_volume(&mut self, volume: i32) {
+        if let Some(transport) = &self.audio_transport {
+            transport
+                .capture
+                .volume
+                .store(volume.clamp(0, 125), Ordering::Release);
+            return;
+        }
         unsafe {
             (self.api.audio_set_volume)(self.player, volume.clamp(0, 125));
         }
@@ -941,7 +948,10 @@ impl VlcPlayer {
             PlaybackSnapshot {
                 time_ms: (self.api.player_get_time)(self.player),
                 length_ms: (self.api.player_get_length)(self.player),
-                volume: (self.api.audio_get_volume)(self.player),
+                volume: self.audio_transport.as_ref().map_or_else(
+                    || (self.api.audio_get_volume)(self.player),
+                    |transport| transport.capture.volume.load(Ordering::Acquire),
+                ),
                 state: {
                     let state = (self.api.player_get_state)(self.player);
                     if state == 6
@@ -1160,6 +1170,8 @@ mod tests {
             "No decoded PCM received"
         );
         assert!(nonzero.load(Ordering::Relaxed) > 0);
+        player.set_volume(0);
+        assert_eq!(player.snapshot().volume, 0);
         let before = generation.load(Ordering::Acquire);
         player.seek_to(3000);
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -1167,6 +1179,29 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(generation.load(Ordering::Acquire) > before);
+        nonzero.store(0, Ordering::Relaxed);
+        let muted_start = packets.load(Ordering::Relaxed);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while packets.load(Ordering::Relaxed) < muted_start + 8 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(packets.load(Ordering::Relaxed) >= muted_start + 8);
+        assert_eq!(
+            nonzero.load(Ordering::Relaxed),
+            0,
+            "Volume 0 must produce silent forwarded PCM"
+        );
+        player.set_volume(100);
+        assert_eq!(player.snapshot().volume, 100);
+        player.seek_to(1000);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while nonzero.load(Ordering::Relaxed) == 0 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            nonzero.load(Ordering::Relaxed) > 0,
+            "Restoring volume must restore samples"
+        );
         assert!(!player.audio_status().unwrap().0);
         player.stop();
         drop(player);
