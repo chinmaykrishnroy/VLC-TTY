@@ -8,7 +8,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from binary_arch import require_architecture
+from binary_arch import require_architecture, require_static_crt
 from package_release import ROOT, DOCS, digest
 from verify_package import verify_documentation
 
@@ -16,6 +16,8 @@ from verify_package import verify_documentation
 def verify(executable, target):
     executable = executable.resolve()
     require_architecture(executable, target)
+    if "windows" in target:
+        require_static_crt(executable)
     sidecar = executable.with_name(executable.name + ".sha256")
     if sidecar.read_text().split() != [digest(executable), executable.name]:
         raise RuntimeError("Portable executable checksum mismatch")
@@ -40,6 +42,8 @@ def verify(executable, target):
 
         if run("--help") != run("-h"):
             raise RuntimeError("-h and --help must display the same options")
+        if run("--help") != run("--ssh", "--help"):
+            raise RuntimeError("Combined options lost portable help")
         print(run("--version").strip())
         identity = json.loads(run("--bundle-info"))
         if identity["target"] != target or not identity["runtime_included"]:
@@ -66,8 +70,17 @@ def verify(executable, target):
         run("--extract-to", str(extracted))
         verify_documentation(extracted / "app", DOCS)
         require_architecture(extracted / "app" / ("vlc-tty.exe" if "windows" in target else "vlc-tty"), target)
+        if "windows" in target:
+            require_static_crt(extracted / "app/vlc-tty.exe")
+        inventory = json.loads((extracted / "RUNTIME_FILES.json").read_text())
+        for relative, expected in inventory.items():
+            if digest(extracted / relative) != expected:
+                raise RuntimeError(f"Runtime component checksum mismatch: {relative}")
         if not (extracted / "BUNDLE.json").is_file():
             raise RuntimeError("Missing embedded build manifest")
+        if os.name != "nt":
+            from termination_smoke import smoke
+            smoke(alone, ROOT / "samples/sample.mp4")
         print("Portable smoke passed: architecture, help, concurrent launches, bundled runtime, decoding, cleanup, extraction and docs")
 
 

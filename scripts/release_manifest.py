@@ -25,6 +25,10 @@ def manifest(directory):
         identity = json.loads((directory / (name + ".json")).read_text())
         if identity["target"] != target or not identity["runtime_included"] or identity.get("source_dirty", True):
             raise ValueError(f"Invalid release build identity for {name}")
+        if not identity["runtime"].get("source_correspondence", {}).get("verified", False):
+            raise ValueError(f"Unresolved runtime source correspondence blocks publication: {name}")
+        if "linux" not in target and not identity["runtime"].get("archive_verified", False):
+            raise ValueError(f"Unverified upstream runtime archive blocks publication: {name}")
         sources.add(identity["runtime"]["source_companion"]["file"])
     for name in sorted(expected | sources):
         path = directory / name
@@ -37,6 +41,9 @@ def manifest(directory):
         if name in expected and not sidecar.exists():
             raise ValueError(f"Missing executable checksum: {name}")
         lines.append(f"{checksum}  {name}\n")
+    for name in sorted(expected):
+        identity_path = directory / (name + ".json")
+        lines.append(f"{digest(identity_path)}  {identity_path.name}\n")
     (directory / "SHA256SUMS").write_text("".join(lines))
 
 

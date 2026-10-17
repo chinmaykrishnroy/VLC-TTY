@@ -6,6 +6,10 @@
 - Add portable self-extracting executables with embedded LibVLC and full help.
 - Validate executable CPU architecture before native smoke tests.
 - Add contributor and release documentation.
+- Add UTF-8 M3U playlist import/export, shuffle, repeat, initial volume and speed options.
+- Preserve duplicate playlist occurrences during navigation and shuffle restoration.
+- Statically link the Windows C runtime and supervise the extracted player's lifetime.
+- Preserve portable help with combined options and gate publication on verified runtime source provenance.
 
 
 ## 0.6.0 (development)

@@ -14,6 +14,9 @@ use std::{
 
 #[path = "../help.rs"]
 mod help;
+mod lifetime;
+#[path = "../termination.rs"]
+mod termination;
 include!(concat!(env!("OUT_DIR"), "/bundle.rs"));
 
 fn unpack(payload: &[u8], hash: &str, destination: &Path) -> Result<()> {
@@ -76,11 +79,11 @@ fn command(directory: &Path) -> Result<Command> {
 
 fn run() -> Result<u8> {
     let args: Vec<OsString> = env::args_os().skip(1).collect();
-    if args.len() == 1 && (args[0] == "--help" || args[0] == "-h") {
+    if informational(&args, &["--help", "-h"]) {
         help::print(true);
         return Ok(0);
     }
-    if args.len() == 1 && (args[0] == "--version" || args[0] == "-V") {
+    if informational(&args, &["--version", "-V"]) {
         println!("VLC-TTY {} (portable)", env!("CARGO_PKG_VERSION"));
         return Ok(0);
     }
@@ -104,12 +107,47 @@ fn run() -> Result<u8> {
         );
         return Ok(0);
     }
+    let termination = termination::Termination::install()?;
     let temporary = tempfile::Builder::new().prefix("vlc-tty-").tempdir()?;
     unpack(PAYLOAD, PAYLOAD_SHA, temporary.path())?;
-    let status = command(temporary.path())?.args(args).status().context(
+    if termination.requested() {
+        return Ok(130);
+    }
+    let status = lifetime::wait(command(temporary.path())?.args(args), &termination).context(
         "Could not start the extracted player. On Linux, TMPDIR must allow executable files",
     )?;
     Ok(status.code().unwrap_or(1).clamp(0, 255) as u8)
+}
+
+fn informational(args: &[OsString], flags: &[&str]) -> bool {
+    let mut value = false;
+    for arg in args {
+        if value {
+            value = false;
+            continue;
+        }
+        if arg == "--" {
+            break;
+        }
+        if flags.iter().any(|flag| arg == flag) {
+            return true;
+        }
+        value = [
+            "--graphics",
+            "--fps",
+            "--decode-height",
+            "--subtitle",
+            "--playlist",
+            "--export-playlist",
+            "--repeat",
+            "--volume",
+            "--rate",
+            "--extract-to",
+        ]
+        .iter()
+        .any(|name| arg == name);
+    }
+    false
 }
 
 fn main() -> ExitCode {
@@ -125,6 +163,19 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn help_combines_with_options_but_not_option_values_or_media() {
+        let args = |args: &[&str]| args.iter().map(OsString::from).collect::<Vec<_>>();
+        assert!(informational(
+            &args(&["--ssh", "--help"]),
+            &["--help", "-h"]
+        ));
+        assert!(!informational(&args(&["--", "--help"]), &["--help", "-h"]));
+        assert!(!informational(
+            &args(&["--subtitle", "--help"]),
+            &["--help", "-h"]
+        ));
+    }
     #[test]
     fn corrupt_payload_fails_before_extraction() {
         let temp = tempfile::tempdir().unwrap();

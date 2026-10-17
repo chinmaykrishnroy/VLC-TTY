@@ -12,6 +12,12 @@ Usage: vlc-tty [OPTIONS] [FILE|FOLDER|URL]\n\n\
   --fps N               Draw/encode limit, 1–120 (local default: 60)\n\
   --decode-height N     Callback cap, 0–4320; 0 uncapped (local: 1080)\n\
   --subtitle PATH       Load an external subtitle file\n\
+  --playlist PATH       Open a UTF-8 M3U/M3U8 queue (relative to its file)\n\
+  --export-playlist PATH Save supplied media/playlist and exit without VLC\n\
+  --repeat MODE         off|all|one (default: off)\n\
+  --shuffle             Shuffle queue, keeping the current item first\n\
+  --volume N            Initial volume, 0–125 (default: 100)\n\
+  --rate N              Initial speed, 0.25–4 (default: 1)\n\
   --native-window       Separate video window, local desktop only\n\
   --doctor              Print runtime/session diagnostics without a TUI\n\
   --smoke-test MEDIA    Require decoded frames and an advancing clock\n\
@@ -21,6 +27,7 @@ Allocate a terminal with ssh -t. Pixel graphics depend on your client terminal;\
 ANSI half-blocks are the fallback. SSH does not forward audio.\n\n\
 Keyboard: Space pause; s stop; f/F11 fullscreen; arrows seek; +/- volume;\n\
 m mute; [/] speed; = normal speed; e next frame; n/p next/previous;\n\
+z shuffle; Shift+R repeat off/all/one;\n\
 Tab queue; o open; l captions; Shift+S/A track menus; ,/. subtitle delay;\n\
 j/k audio delay; g renderer; i info; ? help; q quit.\n\n\
 Examples:\n\

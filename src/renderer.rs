@@ -458,7 +458,11 @@ fn browser(f: &mut Frame, app: &App, area: Rect, zones: &mut HitZones) {
         return;
     }
     let title = if app.view_mode == ViewMode::Playlist {
-        format!(" PLAYBACK QUEUE · Repeat {:?} ", app.queue.repeat)
+        format!(
+            " PLAYBACK QUEUE · Repeat {:?} · Shuffle {} ",
+            app.queue.repeat,
+            if app.queue.shuffled { "on" } else { "off" }
+        )
     } else {
         format!(
             " FILES - {} ",
@@ -740,6 +744,7 @@ fn overlay(
                 "Space         Play / Pause       v             Cycle subtitles",
                 "s / x         Stop               b             Cycle audio tracks",
                 "n / p         Next / Previous    Shift+S / S   Subtitle tracks menu",
+                "z / Shift+R   Shuffle / Repeat",
                 "Left / Right  Seek 10s           Shift+A / A   Audio tracks menu",
                 "Shift+Left/Rt Seek 3s            l / L         Load subtitle file",
                 "Ctrl+Left/Rt  Seek 60s           ,             Subtitle delay -100ms",

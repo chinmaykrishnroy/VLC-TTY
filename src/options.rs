@@ -1,11 +1,18 @@
 //! Resolve the SSH profile once at startup; explicit flags override profile defaults.
 use crate::graphics::GraphicsChoice;
+use crate::queue::RepeatMode;
 use anyhow::{bail, Context, Result};
 
 #[derive(Debug)]
 pub struct Options {
     pub media: Option<String>,
     pub subtitle: Option<String>,
+    pub playlist: Option<String>,
+    pub export_playlist: Option<String>,
+    pub repeat: RepeatMode,
+    pub shuffle: bool,
+    pub volume: i32,
+    pub rate: f32,
     pub graphics: GraphicsChoice,
     pub fps: u32,
     pub decode_height: u32,
@@ -27,6 +34,12 @@ impl Options {
         let mut out = Self {
             media: None,
             subtitle: None,
+            playlist: None,
+            export_playlist: None,
+            repeat: RepeatMode::Off,
+            shuffle: false,
+            volume: 100,
+            rate: 1.0,
             graphics: GraphicsChoice::Auto,
             fps: 60,
             decode_height: 1080,
@@ -66,6 +79,7 @@ impl Options {
                         | "--silent"
                         | "--audio"
                         | "--native-window"
+                        | "--shuffle"
                 )
             {
                 bail!("{name} does not take an inline value");
@@ -86,6 +100,21 @@ impl Options {
                 "--silent" => silent = Some(true),
                 "--audio" => silent = Some(false),
                 "--native-window" => out.native_window = true,
+                "--shuffle" => out.shuffle = true,
+                "--playlist" => out.playlist = Some(value()?),
+                "--export-playlist" => out.export_playlist = Some(value()?),
+                "--repeat" => {
+                    out.repeat = match value()?.as_str() {
+                        "off" => RepeatMode::Off,
+                        "all" => RepeatMode::All,
+                        "one" => RepeatMode::One,
+                        _ => bail!("--repeat must be off, all or one"),
+                    }
+                }
+                "--volume" => {
+                    out.volume = value()?.parse().context("--volume must be an integer")?
+                }
+                "--rate" => out.rate = value()?.parse().context("--rate must be a number")?,
                 "--graphics" => out.graphics = value()?.parse().map_err(anyhow::Error::msg)?,
                 "--subtitle" => out.subtitle = Some(value()?),
                 "--fps" => {
@@ -112,6 +141,18 @@ impl Options {
         }
         if out.help || out.version {
             return Ok(out);
+        }
+        if out.media.is_some() && out.playlist.is_some() {
+            bail!("Specify either media or --playlist, not both");
+        }
+        if !(0..=125).contains(&out.volume) {
+            bail!("--volume must be between 0 and 125");
+        }
+        if !out.rate.is_finite() || !(0.25..=4.0).contains(&out.rate) {
+            bail!("--rate must be between 0.25 and 4");
+        }
+        if out.export_playlist.is_some() && (out.doctor || out.smoke_test) {
+            bail!("--export-playlist cannot be combined with diagnostic modes");
         }
         out.fps = fps.unwrap_or(if out.ssh { 15 } else { 60 });
         out.decode_height = match decode {
@@ -188,10 +229,35 @@ mod tests {
             vec!["--silent=false"],
             vec!["--audio=false"],
             vec!["one", "two"],
+            vec!["--rate=NaN"],
+            vec!["--rate=0"],
+            vec!["--volume=126"],
+            vec!["--shuffle=false"],
+            vec!["--repeat=invalid"],
+            vec!["--playlist", "queue.m3u", "movie.mp4"],
         ] {
             assert!(parse(&args, false).is_err(), "{args:?}");
         }
         assert!(Options::parse(Vec::new(), false, Some("invalid")).is_err());
+    }
+    #[test]
+    fn playlist_controls_and_export_parse_without_media_or_runtime() {
+        let opts = parse(
+            &[
+                "--playlist=queue.m3u8",
+                "--shuffle",
+                "--repeat=all",
+                "--volume=80",
+                "--rate=1.5",
+                "--export-playlist=copy.m3u8",
+            ],
+            false,
+        )
+        .unwrap();
+        assert!(opts.shuffle);
+        assert_eq!(opts.repeat, RepeatMode::All);
+        assert_eq!((opts.volume, opts.rate), (80, 1.5));
+        assert_eq!(opts.playlist.as_deref(), Some("queue.m3u8"));
     }
     #[test]
     fn paths_starting_with_dash_and_headless_smoke_are_supported() {

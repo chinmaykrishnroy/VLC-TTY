@@ -1,4 +1,4 @@
-"""Install coherent runtimes for CI only; never copy them into release artifacts."""
+"""Install hash-verified coherent runtimes for native tests and portable builds."""
 import hashlib
 import json
 import os
@@ -43,6 +43,7 @@ def install(target):
             subprocess.run(["ditto", str(mount / "VLC.app"), str(home)], check=True)
         finally:
             subprocess.run(["hdiutil", "detach", str(mount)], check=True)
+    (home / ".vlc-tty-origin.json").write_text(json.dumps({"target": target, "url": spec["url"], "sha256": actual}) + "\n")
     env_file = os.environ["GITHUB_ENV"]
     with open(env_file, "a", encoding="utf-8") as output:
         output.write(f"VLC_HOME={home}\n")

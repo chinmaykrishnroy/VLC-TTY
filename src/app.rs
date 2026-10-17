@@ -118,7 +118,8 @@ impl MenuKind {
                 "Jump Forward 10s           Right",
                 "Jump Backward 10s          Left",
                 "Next Frame                 E",
-                "Repeat: Off / All / One",
+                "Repeat: Off / All / One     Shift+R",
+                "Shuffle                    Z",
             ],
             Self::Audio => &[
                 "Cycle Audio Track          B",
@@ -462,6 +463,8 @@ impl App {
             if let Some(source) = self.queue.sources().get(self.selected).cloned() {
                 if let Err(error) = self.open_media(&source, player) {
                     self.notify(format!("Open error: {error:#}"));
+                } else {
+                    self.queue.set_position(self.selected);
                 }
             }
             return Ok(());
@@ -487,7 +490,7 @@ impl App {
     }
 
     pub fn adjacent(&mut self, player: &mut dyn Playback, step: isize) {
-        let Some(source) = self.queue.adjacent(step, false).map(str::to_owned) else {
+        let Some(index) = self.queue.adjacent_index(step, false) else {
             self.notify(if step < 0 {
                 "Start of playback queue"
             } else {
@@ -495,9 +498,21 @@ impl App {
             });
             return;
         };
+        let source = self.queue.sources()[index].clone();
         if let Err(error) = self.open_media(&source, player) {
             self.notify(format!("Open error: {error:#}"));
+        } else {
+            self.queue.set_position(index);
         }
+    }
+
+    fn toggle_shuffle(&mut self) {
+        self.queue.toggle_shuffle();
+        self.notify(if self.queue.shuffled {
+            "Shuffle on"
+        } else {
+            "Shuffle off"
+        });
     }
 
     pub fn tick(&mut self, player: &mut dyn Playback) {
@@ -521,9 +536,12 @@ impl App {
             );
         }
         if state == 6 {
-            if let Some(source) = self.queue.adjacent(1, true).map(str::to_owned) {
+            if let Some(index) = self.queue.adjacent_index(1, true) {
+                let source = self.queue.sources()[index].clone();
                 if let Err(error) = self.open_media(&source, player) {
                     self.notify(format!("Open error: {error:#}"));
+                } else {
+                    self.queue.set_position(index);
                 }
             } else {
                 self.notify("End of playback queue");
@@ -937,6 +955,7 @@ impl App {
                 self.queue.cycle_repeat();
                 self.notify(format!("Repeat: {:?}", self.queue.repeat));
             }
+            (MenuKind::Playback, 11) => self.toggle_shuffle(),
 
             // Audio
             (MenuKind::Audio, 0) => self.cycle_audio(player),
@@ -1309,6 +1328,11 @@ impl App {
             KeyCode::Enter if self.view_mode != ViewMode::Player && !self.fullscreen => {
                 self.enter(player)?
             }
+            KeyCode::Char('z') => self.toggle_shuffle(),
+            KeyCode::Char('R') => {
+                self.queue.cycle_repeat();
+                self.notify(format!("Repeat: {:?}", self.queue.repeat));
+            }
             KeyCode::Char('r') => self.refresh(),
             _ => {}
         }
@@ -1524,6 +1548,27 @@ impl App {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn repeated_playlist_entries_advance_by_occurrence() {
+        let mut app = App::new(None);
+        let mut player = FakePlayback::default();
+        let first = "https://fixture/first.mp4";
+        let last = "https://fixture/last.mp4";
+        app.open_media(first, &mut player).unwrap();
+        app.queue
+            .replace(vec![first.into(), first.into(), last.into()]);
+        app.adjacent(&mut player, 1);
+        assert_eq!(app.current.as_deref(), Some(first));
+        app.adjacent(&mut player, 1);
+        assert_eq!(app.current.as_deref(), Some(last));
+        app.adjacent(&mut player, 1);
+        assert_eq!(
+            player.opened.len(),
+            3,
+            "Repeat off must stop after last occurrence"
+        );
+    }
+
     use super::*;
     use crate::playback::test_support::FakePlayback;
     #[test]

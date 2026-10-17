@@ -1,2 +1,2 @@
 [target.'cfg(windows)']
-rustflags = ["-C", "link-arg=/STACK:8388608"]
+rustflags = ["-C", "link-arg=/STACK:8388608", "-C", "target-feature=+crt-static"]

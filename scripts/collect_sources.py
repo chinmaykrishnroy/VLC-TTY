@@ -88,6 +88,15 @@ def upstream(output):
         source = root / "vlc-3.0.24"
         fetch = source / "contrib/source-fetch"
         fetch.mkdir()
+        # The release recipe writes this abbreviated pin into a .githash file,
+        # then its generic checker insists on 40 hex digits. Expand only the
+        # verified same commit; retain the adjustment in the source manifest.
+        tremor_pin = "b56ffce0c0773ec5ca04c466bc00b1bbcaf65aef"
+        recipe = source / "contrib/src/tremor/rules.mak"
+        original = recipe.read_text()
+        if "b56ffce0" not in original:
+            raise RuntimeError("Unexpected Tremor source recipe; review the pin adjustment")
+        recipe.write_text(original.replace("b56ffce0", tremor_pin))
         subprocess.run(["../bootstrap", "--build=x86_64-linux-gnu", "--host=x86_64-w64-mingw32"], cwd=fetch, check=True)
         # Fetch source only. Native compilers answer configuration probes; no
         # target library is compiled. fetch-all deliberately preserves a superset.
@@ -99,6 +108,7 @@ def upstream(output):
         if not records:
             raise RuntimeError("No contributed dependency sources collected")
         manifest = {"origin": VLC_URL, "sha256": VLC_SHA, "contrib_sources": records,
+                    "recipe_adjustments": {"contrib/src/tremor/rules.mak": {"original_pin": "b56ffce0", "expanded_pin": tremor_pin}},
                     "scope": "VLC release source plus checksum/git-pinned contrib recipe source superset; not a claim of bit-reproducible upstream binaries"}
         (source / "SOURCE_MANIFEST.json").write_text(json.dumps(manifest, indent=2) + "\n")
         shutil.rmtree(fetch)

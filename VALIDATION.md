@@ -6,7 +6,11 @@ The reported Windows failure was reproduced from the exact downloaded ARM64 exec
 
 The Windows x64 standalone development build passed matching `-h`/`--help`, version/bundle identity, two concurrent runtime loads, actual silent decoding, normal-exit extraction cleanup, explicit extraction and documentation checks. Its LibVLC loaded from private extraction paths while external runtime paths were deliberately invalid. A regression also requires an invalid replacement runtime to fail instead of silently falling back to installed VLC.
 
-60 application tests plus the launcher integrity test passed locally. Multi-platform standalone/source-companion CI is being validated; the successful seven-job run below is evidence for the earlier thin-application milestone, not proof of the new packaging.
+The follow-up passes 65 deterministic Rust tests and all three explicit LibVLC runtime tests on Windows x64, strict Clippy, seven packaging regressions and actionlint. Tests now cover duplicate playlist occurrences, shuffle restoration, CLI validation, combined portable help, static CRT import inspection and rejection of unresolved source provenance.
+
+[Portable CI run 39028061548](https://github.com/chinmaykrishnroy/VLC-TTY/actions/runs/39028061548), at `d074de6`, passed all six native build/runtime/standalone lanes and the Ubuntu 26.04 ARM64 headless/PTY lane. Linux standalone files decoded inside Ubuntu containers with no VLC packages. The additional common-source job failed in an upstream Tremor recipe that stored an abbreviated pin but required 40 digits during verification. The follow-up expands that same verified commit and records the adjustment. The new static-CRT/lifetime/playlist follow-up needs its own CI run; previous success is not assigned to it.
+
+Windows/macOS exact binary-to-contrib-source correspondence remains unverified, and publication now refuses that unresolved identity. Current Pi evidence below covers the earlier thin executable with distro LibVLC, pending the new standalone device check. See [checkpoint review](docs/portable-review.md).
 
 ## Earlier thin-application milestone
 
@@ -62,4 +66,4 @@ Unit tests report runtime tests as ignored by default, so machines without VLC c
 - Optional local audio/lipsync and native-window behavior. Audio forwarding to the SSH client is not implemented.
 - Clean-machine installation, platform security prompts, signing/notarization if future distribution claims require them.
 
-Application archives require installed matching LibVLC libraries and plugins. Automated and short device checks do not establish movie-length performance, audible output, terminal pixel quality, signed installers or VLC feature parity.
+Thin application builds require installed matching LibVLC libraries and plugins; portable builds embed their runtime. Automated and short device checks do not establish movie-length performance, audible output, terminal pixel quality, platform signing or VLC feature parity.

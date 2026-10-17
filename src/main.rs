@@ -7,9 +7,11 @@ mod latest;
 mod metadata;
 mod options;
 mod playback;
+mod playlist;
 mod queue;
 mod renderer;
 mod subtitles;
+mod termination;
 mod vlc;
 
 use crate::{
@@ -46,10 +48,18 @@ fn usage() {
     help::print(false);
 }
 
-fn smoke_test(player: &mut VlcPlayer, source: &str) -> Result<()> {
+fn smoke_test(
+    player: &mut VlcPlayer,
+    source: &str,
+    termination: &termination::Termination,
+) -> Result<()> {
     player.open(source)?;
     let started = Instant::now();
     loop {
+        if termination.requested() {
+            player.stop();
+            bail!("Playback interrupted");
+        }
         let info = player.snapshot();
         if info.frames >= 3 && info.time_ms > 200 {
             let frame = player
@@ -146,6 +156,7 @@ fn main() -> Result<()> {
 }
 
 fn run() -> Result<()> {
+    let termination = termination::Termination::install()?;
     let remote =
         std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
     let decode_env = std::env::var("TERMVLC_DECODE_MAX").ok();
@@ -156,6 +167,20 @@ fn run() -> Result<()> {
     }
     if opts.version {
         println!("VLC-TTY {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    let playlist_sources = opts
+        .playlist
+        .as_deref()
+        .map(|path| playlist::load(Path::new(path)))
+        .transpose()?;
+    if let Some(destination) = &opts.export_playlist {
+        let sources = playlist_sources.unwrap_or_else(|| opts.media.clone().into_iter().collect());
+        if sources.iter().any(|source| Path::new(source).is_dir()) {
+            bail!("Export needs individual media entries or --playlist, not a folder");
+        }
+        playlist::save(Path::new(destination), &sources)?;
+        println!("Saved {} entries to {destination}", sources.len());
         return Ok(());
     }
     if opts.doctor {
@@ -181,11 +206,19 @@ fn run() -> Result<()> {
         return smoke_test(
             &mut player,
             opts.media.as_deref().context("Missing smoke-test media")?,
+            &termination,
         );
     }
     let initial = opts.media.as_deref().filter(|s| !s.contains("://"));
     let mut app = App::new(initial.map(Path::new));
     app.native_dialogs = !opts.ssh;
+    app.volume = opts.volume;
+    player.set_volume(opts.volume);
+    if let Some(sources) = playlist_sources {
+        let first = sources[0].clone();
+        app.open_media(&first, &mut player)?;
+        app.queue.replace(sources);
+    }
     if let Some(ref source) = opts.media {
         if source.contains("://") || Path::new(source).is_file() {
             app.open_media(source, &mut player)?;
@@ -193,6 +226,11 @@ fn run() -> Result<()> {
     }
     if let Some(ref file) = opts.subtitle {
         app.load_subtitle(Path::new(file), &mut player)?;
+    }
+    player.set_rate(opts.rate);
+    app.queue.repeat = opts.repeat;
+    if opts.shuffle {
+        app.queue.toggle_shuffle();
     }
     let (_guard, mut terminal) = TerminalGuard::enter()?;
     // Query pixel-graphics support before the event loop begins consuming stdin.
@@ -216,6 +254,9 @@ fn run() -> Result<()> {
     let mut last_draw = Instant::now() - Duration::from_secs(1);
     let interval = Duration::from_millis((1000 / opts.fps.max(1)) as u64);
     loop {
+        if termination.requested() {
+            return Ok(());
+        }
         if event::poll(Duration::from_millis(4))? {
             let first = event::read()?;
             let batch_text = matches!(&first, Event::Key(k) if k.kind == KeyEventKind::Press

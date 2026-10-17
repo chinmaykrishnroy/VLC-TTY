@@ -1936,12 +1936,16 @@ dependencies = [
  "flate2",
  "icy_sixel",
  "image",
+ "libc",
  "libloading",
+ "rand 0.8.8",
  "ratatui",
  "ratatui-image",
  "sha2",
+ "signal-hook",
  "tar",
  "tempfile",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

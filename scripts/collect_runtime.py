@@ -79,7 +79,8 @@ def collect_linux(destination):
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(notice, target)
     shutil.copytree("/usr/share/common-licenses", destination / "licenses/common", symlinks=False)
-    return {"origin": "Ubuntu distribution packages", "glibc_baseline": platform.libc_ver()[1], "packages": identities}
+    return {"origin": "Ubuntu distribution packages", "glibc_baseline": platform.libc_ver()[1], "packages": identities,
+            "source_correspondence": {"verified": True, "method": "exact installed distro source package versions"}}
 
 
 def collect(destination, target, runtime_home):
@@ -96,4 +97,9 @@ def collect(destination, target, runtime_home):
         destination.mkdir()
         shutil.copytree(runtime_home, destination / "VLC.app", symlinks=True)
     spec = json.loads(Path(__file__).with_name("runtime-manifest.json").read_text())[target]
-    return {"origin": spec["url"], "upstream_sha256": spec["sha256"], "runtime": "VLC 3.0.24"}
+    marker = runtime_home / ".vlc-tty-origin.json"
+    origin = json.loads(marker.read_text()) if marker.is_file() else {}
+    verified = origin == {"target": target, "url": spec["url"], "sha256": spec["sha256"]}
+    return {"origin": spec["url"] if verified else "local runtime directory (upstream archive identity unverified)",
+            "upstream_sha256": spec["sha256"] if verified else None, "archive_verified": verified,
+            "source_correspondence": {"verified": False, "reason": "Contrib source superset does not yet establish exact upstream binary-to-source build correspondence"}}

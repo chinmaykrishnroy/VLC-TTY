@@ -18,7 +18,7 @@
 
 - Local files, folders and network URLs through LibVLC.
 - Play/pause, seek, stop, speed control and frame stepping.
-- File browser and independent playback queue with repeat modes.
+- File browser, UTF-8 M3U playlists, shuffle and repeat modes.
 - External SRT/VTT captions, track selection and subtitle timing controls.
 - Kitty, Sixel and iTerm2 pixel graphics, plus ANSI half-block fallback.
 - Silent SSH profile with bounded decode size and frame rate.
@@ -36,6 +36,9 @@ Get verified files from [Releases](https://github.com/chinmaykrishnroy/VLC-TTY/r
 vlc-tty /path/to/movie.mp4
 vlc-tty --subtitle movie.en.srt movie.mkv
 vlc-tty --graphics ansi movie.mp4
+vlc-tty --playlist favourites.m3u8 --shuffle --repeat all
+vlc-tty --playlist favourites.m3u8 --export-playlist copy.m3u8
+vlc-tty --volume 80 --rate 1.25 movie.mp4
 vlc-tty --help
 ```
 
@@ -69,6 +72,7 @@ The smoke check requires decoded frames and an advancing playback clock, without
 | `[` / `]` / `=` | Slower / faster / normal speed |
 | `e` | Next frame |
 | `n` / `p` / `Tab` | Next / previous / queue |
+| `z` / `Shift+R` | Shuffle / cycle repeat off, all, one |
 | `o` / `l` | Open media / load external captions |
 | `Shift+S` / `Shift+A` | Subtitle / audio track picker |
 | `,` / `.` | Adjust subtitle delay |

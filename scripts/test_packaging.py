@@ -70,12 +70,20 @@ class PackagingTests(unittest.TestCase):
                 path.write_bytes(target.encode())
                 path.with_name(path.name + ".sha256").write_text(f"{digest(path)}  {path.name}\n")
                 (directory / (path.name + ".json")).write_text(json.dumps({"target": target, "runtime_included": True,
-                    "source_dirty": False, "runtime": {"source_companion": {"file": "vlc-3.0.24-source-snapshot.tar.gz"}}}))
+                    "source_dirty": False, "runtime": {"archive_verified": True, "source_correspondence": {"verified": True}, "source_companion": {"file": "vlc-3.0.24-source-snapshot.tar.gz"}}}))
             (directory / "vlc-3.0.24-source-snapshot.tar.gz").write_bytes(b"test source companion")
             source = directory / "vlc-3.0.24-source-snapshot.tar.gz"
             source.with_name(source.name + ".sha256").write_text(f"{digest(source)}  {source.name}\n")
             manifest(directory)
-            self.assertEqual(len((directory / "SHA256SUMS").read_text().splitlines()), 7)
+            self.assertEqual(len((directory / "SHA256SUMS").read_text().splitlines()), 13)
+            metadata = directory / (path.name + ".json")
+            identity = json.loads(metadata.read_text())
+            identity["runtime"]["source_correspondence"]["verified"] = False
+            metadata.write_text(json.dumps(identity))
+            with self.assertRaisesRegex(ValueError, "source correspondence blocks publication"):
+                manifest(directory)
+            identity["runtime"]["source_correspondence"]["verified"] = True
+            metadata.write_text(json.dumps(identity))
             path.write_bytes(b"corrupted archive")
             with self.assertRaisesRegex(ValueError, "Checksum mismatch"):
                 manifest(directory)
