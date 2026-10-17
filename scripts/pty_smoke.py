@@ -60,7 +60,9 @@ def smoke(binary, media, duration=12, expect_caption=None):
             raise RuntimeError(f"Player exited during controls: {process.returncode}")
 
     try:
-        collect(1.5)
+        # Startup notifications occupy the OSD for four seconds. Let them expire
+        # before asserting the paused-state label rather than the notification.
+        collect(4.3)
         send(b"f")                         # Fullscreen.
         send(b" ")                         # Pause.
         fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 36, 120, 0, 0))
