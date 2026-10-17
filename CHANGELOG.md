@@ -10,6 +10,7 @@
 - Preserve duplicate playlist occurrences during navigation and shuffle restoration.
 - Statically link the Windows C runtime and supervise the extracted player's lifetime.
 - Preserve portable help with combined options and gate publication on verified runtime source provenance.
+- Report missing media paths before starting the terminal or decoder; exercise real CLI playlist export without either dependency.
 
 
 ## 0.6.0 (development)

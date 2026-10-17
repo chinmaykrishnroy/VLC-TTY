@@ -197,6 +197,19 @@ fn run() -> Result<()> {
         );
         return Ok(());
     }
+    if let Some(source) = opts
+        .media
+        .as_deref()
+        .filter(|source| !source.contains("://"))
+    {
+        let path = Path::new(source);
+        if !path.is_file() && !path.is_dir() {
+            bail!(
+                "Media path not found or not a regular file/folder: {}",
+                path.display()
+            );
+        }
+    }
     if !opts.smoke_test && (!io::stdin().is_terminal() || !io::stdout().is_terminal()) {
         bail!("Interactive playback requires a terminal on stdin and stdout. Use ssh -t, or --smoke-test MEDIA for headless decoding checks.");
     }
