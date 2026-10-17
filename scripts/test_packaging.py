@@ -7,9 +7,20 @@ import zipfile
 import tarfile
 from package_release import create_archive, digest, package, ROOT, TARGETS
 from release_manifest import manifest
+from verify_package import verify_documentation
 
 
 class PackagingTests(unittest.TestCase):
+    def test_packaged_documentation_links_resolve_inside_archive(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "README.md").write_text("[Guide](docs/SSH.md#setup) [Website](https://example.com)\n")
+            with self.assertRaisesRegex(RuntimeError, "Broken packaged documentation link"):
+                verify_documentation(root, ["README.md"])
+            (root / "docs").mkdir()
+            (root / "docs/SSH.md").write_text("[Home](../README.md)\n")
+            verify_documentation(root, ["README.md", "docs/SSH.md"])
+
     def test_archive_preserves_files_permissions_and_checksum(self):
         for windows in (True, False):
             with self.subTest(windows=windows), tempfile.TemporaryDirectory() as temporary:

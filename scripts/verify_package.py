@@ -2,12 +2,25 @@
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tarfile
 import tempfile
 import zipfile
-from package_release import ROOT, digest
+from urllib.parse import unquote, urlsplit
+from package_release import ROOT, DOCS, digest
+
+
+def verify_documentation(root, documents):
+    for relative in documents:
+        path = root / relative
+        if path.suffix != ".md":
+            continue
+        for link in re.findall(r"\]\(([^)]+)\)", path.read_text(encoding="utf-8-sig")):
+            url = urlsplit(link)
+            if not url.scheme and url.path and not (path.parent / unquote(url.path)).exists():
+                raise RuntimeError(f"Broken packaged documentation link in {relative}: {link}")
 
 
 def verify(archive, target):
@@ -32,6 +45,7 @@ def verify(archive, target):
             raise RuntimeError("Packaged build identity does not match")
         if not (root / "THIRD_PARTY.json").is_file() or not (root / "licenses").is_dir():
             raise RuntimeError("Dependency notices missing")
+        verify_documentation(root, DOCS)
         env = {key: value for key, value in os.environ.items() if key not in ("DISPLAY", "WAYLAND_DISPLAY")}
         for flags in [["--version"], ["--help"], ["--ssh", "--doctor"],
                       ["--ssh", "--smoke-test", str(ROOT / "samples/sample.mp4")]]:

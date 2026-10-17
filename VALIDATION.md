@@ -9,7 +9,7 @@
 - Regression tests reject old encoded results across invalidation, verify tmux ESC doubling, require inline Kitty transfer with a reused image ID, bound encoding pixel budgets and reject overflowing subtitle timestamps.
 - Fullscreen OSD rows and optional caption rows are outside the pixel rectangle. Terminal-specific visual behavior remains a manual gate.
 - The release executable and its extracted Windows archive pass version/help/doctor and an actual silent headless decode check. Diagnostics report no TTY on stdin/stdout during this check.
-- Four Python packaging tests cover Unix executable permissions, pre-1980 ZIP timestamps, architecture-specific runtime manifests, matching release tags, complete archive sets and corruption detection.
+- Five Python packaging tests cover Unix executable permissions, pre-1980 ZIP timestamps, architecture-specific runtime manifests, matching release tags, complete archive sets, corruption detection and packaged documentation links.
 - Workflow syntax passes actionlint 1.7.12. Its runner inventory predates Ubuntu 26.04 ARM64; the documented hosted label is explicitly listed in the configuration.
 
 Earlier regression runs reproduced volume/subtitle/input/queue defects before repair. The new stale-frame, tmux and timestamp cases also failed before their fixes. A passed fake-backend test is not counted as native playback evidence.
@@ -18,7 +18,15 @@ Earlier regression runs reproduced volume/subtitle/input/queue defects before re
 
 The CI workflow requires six native targets: Linux, macOS and Windows on x64 and ARM64. Each target must pass unit tests, strict Clippy, a release build, real LibVLC decoding tests, package creation and a decode check from the extracted archive. An additional Ubuntu 26.04 ARM64 job installs only the headless runtime packages and runs without display variables.
 
-At the time this milestone was prepared, these new workflows were pending their first run. Update this record with run results rather than treating a workflow definition as proof. The initial baseline workflow passed its unit suites but failed Clippy on newer Rust lints; those reported source patterns have been corrected.
+[CI run 39025755417](https://github.com/chinmaykrishnroy/VLC-TTY/actions/runs/39025755417), at commit `1f2a8c1`, passed **all seven jobs**: six native build/runtime/package lanes and the Ubuntu 26.04 ARM64 headless/PTY lane. Each native target produced an archive and passed decoding from its extracted executable. The PTY lane verified video writes, captions, paused redraw, help/queue views and terminal restoration.
+
+Earlier runs exposed newer Clippy lints, unsigned `c_char` on Linux ARM64 and macOS's core-library preload requirement. Those were fixed and the corresponding native lanes passed. Real Pi testing additionally reproduced an unanswered cursor-query crash during presentation resets; the application now resets its viewport without that query, and the failing interaction sequence passes.
+
+## Verified on a physical Pi 5
+
+A Raspberry Pi 5 running Ubuntu Server 26.04 ARM64 loaded distro LibVLC 3.0.23 and decoded video with no display/session or sound-device requirement. A 45-second ANSI PTY run with a synthetic 720p/30 FPS source passed caption, pause, frame-step/seek, help, queue, reopen, resize and clean-exit checks. Peak player RSS was 157.82 MiB and sampled average CPU was 66.18% of one core for this test. A separate direct SSH run delivered ANSI video to the Windows client and exited cleanly after keyboard input.
+
+Full environment, measurements, limits and the reproduced/fixed defect are recorded in [Pi 5 validation](docs/PI5-VALIDATION.md). These checks do not certify pixel-protocol visual quality or long-session performance.
 
 ## Reproduce
 
@@ -37,11 +45,11 @@ Unit tests report runtime tests as ignored by default, so machines without VLC c
 
 ## Required manual acceptance
 
-- Actual Pi 5 / Ubuntu Server 26.04 over SSH, using the intended terminal. Record codec/resolution, renderer, terminal size, FPS/cap, CPU/memory/temperature, connection and session duration.
+- Longer sessions on the Pi 5 through the intended terminal, with real media and recorded network/resource conditions. Basic headless decoding, ANSI controls and direct SSH transport have passed.
 - Kitty, Sixel and iTerm2: inspect caption/OSD visibility, menus, resize, fullscreen transitions, repeated media opens, renderer toggling, image cleanup and tmux passthrough. ANSI fallback needs a real terminal check too.
 - Sustained playback and input responsiveness on low-bandwidth connections, large files and live streams.
 - Unicode paths, invalid media/URLs, track switching and embedded subtitles across platforms.
 - Optional local audio/lipsync and native-window behavior. Audio forwarding to the SSH client is not implemented.
 - Clean-machine installation, platform security prompts, signing/notarization if future distribution claims require them.
 
-Application archives require installed matching LibVLC libraries and plugins. No Pi/device performance, audible output, terminal visual acceptance, signed installers or VLC feature parity is claimed by these local checks.
+Application archives require installed matching LibVLC libraries and plugins. Automated and short device checks do not establish movie-length performance, audible output, terminal pixel quality, signed installers or VLC feature parity.

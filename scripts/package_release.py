@@ -17,8 +17,9 @@ TARGETS = (
     "x86_64-apple-darwin", "aarch64-apple-darwin",
     "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc",
 )
-DOCS = ("README.md", "LICENSE", "BUILDING.md", "RELEASING.md", "OBJECTIVE.md",
-        "ROADMAP.md", "ARCHITECTURE.md", "VALIDATION.md", "docs/SSH.md", "assets/vlc-tty.svg")
+DOCS = ("README.md", "LICENSE", "BUILDING.md", "RELEASING.md", "OBJECTIVE.md", "CHANGELOG.md",
+        "ROADMAP.md", "ARCHITECTURE.md", "VALIDATION.md", "docs/SSH.md", "docs/PI5-VALIDATION.md",
+        "docs/release-platform-research.md", "assets/vlc-tty.svg")
 
 
 def digest(path):

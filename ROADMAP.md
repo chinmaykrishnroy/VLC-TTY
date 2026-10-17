@@ -10,9 +10,10 @@ The release gate is a usable terminal player, including silent SSH playback. Che
 - [x] Bound pending graphics work; reject stale results after media/layout changes.
 - [x] Reuse Kitty image storage and fix Sixel passthrough through tmux.
 - [x] Reserve space for text captions outside pixel graphics.
-- [ ] Pass native CI, runtime decoding and extracted-archive checks across the release matrix.
-- [ ] Validate Pi 5 / Ubuntu Server 26.04 / actual SSH client terminal.
-- [ ] Measure sustained responsiveness, rendering throughput and resource usage.
+- [x] Pass native CI, runtime decoding and extracted-archive checks across the release matrix.
+- [x] Verify Pi 5 / Ubuntu Server 26.04 headless decoding, ANSI controls and direct SSH transport.
+- [ ] Complete pixel-protocol visual acceptance in the intended client terminal.
+- [ ] Measure movie-length responsiveness, rendering throughput and resource usage beyond the initial 45-second synthetic check.
 
 ## Next usability milestones
 

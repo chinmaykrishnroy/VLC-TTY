@@ -15,7 +15,7 @@ A separate Ubuntu 26.04 ARM64 lane checks headless decoding with distro LibVLC a
 
 ## Artifacts
 
-Every archive contains the executable, usage/runtime instructions, original SVG, MIT notice, Cargo dependency inventory/license texts and `BUILD.json` (version, target, source commit, compiler and binary hash). Each archive has a SHA256 sidecar. Release publication combines them into `SHA256SUMS` and refuses missing/extra targets or checksum mismatches.
+Every archive contains the executable, linked product documentation, original SVG, MIT notice, Cargo dependency inventory/license texts and `BUILD.json` (version, target, source commit, compiler and binary hash). Verification also rejects missing local Markdown link targets. Each archive has a SHA256 sidecar. Release publication combines them into `SHA256SUMS` and refuses missing/extra targets or checksum mismatches.
 
 **LibVLC is not included.** Install it separately as described in the README. CI installs coherent runtimes only for testing: distro packages on Linux; hash-pinned official 3.0.24 archives on Windows/macOS. The download manifest lives in `scripts/runtime-manifest.json`. Runtime-inclusive distribution needs a separate component, license and corresponding-source inventory before implementation.
 

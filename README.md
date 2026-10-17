@@ -12,7 +12,7 @@
 
 **VLC-TTY plays video inside your terminal**, with familiar VLC controls powered by LibVLC. Browse files, manage playback and watch through terminal graphics — including silent playback on a headless server over SSH.
 
-> Development preview. A compatible terminal and an installed LibVLC 3 runtime are required. Raspberry Pi performance and terminal compatibility are being validated; see [validation](VALIDATION.md).
+> Development preview. A compatible terminal and an installed LibVLC 3 runtime are required. Pi 5 headless decoding and ANSI controls have been tested; pixel-protocol visual acceptance and long sessions remain open. See [validation](VALIDATION.md).
 
 ## Features
 
@@ -27,6 +27,8 @@
 ## Get started
 
 Application archives are built for **Linux, Windows and macOS**, on **x64 and ARM64**. Download a matching archive from [Releases](https://github.com/chinmaykrishnroy/VLC-TTY/releases) when available, extract it, and put the executable in your PATH. These archives contain the application; install the media runtime separately.
+
+Before the first tagged release, download build artifacts from a successful [CI run](https://github.com/chinmaykrishnroy/VLC-TTY/actions/workflows/ci.yml).
 
 | OS | Runtime setup |
 | --- | --- |
@@ -81,7 +83,7 @@ Mouse controls and menus are available where terminal mouse reporting is support
 
 ## Documentation
 
-[SSH guide](docs/SSH.md) · [Building](BUILDING.md) · [Architecture](ARCHITECTURE.md) · [Objective](OBJECTIVE.md) · [Roadmap](ROADMAP.md) · [Releasing](RELEASING.md) · [Validation](VALIDATION.md) · [Changelog](CHANGELOG.md)
+[SSH guide](docs/SSH.md) · [Building](BUILDING.md) · [Architecture](ARCHITECTURE.md) · [Objective](OBJECTIVE.md) · [Roadmap](ROADMAP.md) · [Releasing](RELEASING.md) · [Validation](VALIDATION.md) · [Pi 5 results](docs/PI5-VALIDATION.md) · [Changelog](CHANGELOG.md)
 
 ## Contributing
 
