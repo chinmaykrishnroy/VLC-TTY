@@ -1,4 +1,4 @@
-//! VLC media player — authentic desktop interface in TUI.
+//! TermVLC — authentic desktop interface in TUI.
 //! Implements VLC Desktop layout: top menu bar, full-width player/welcome canvas,
 //! timeline slider, VLC controls toolbar with clean text buttons, and non-overlapping overlays.
 use std::sync::OnceLock;
@@ -85,7 +85,19 @@ pub fn time(ms: i64) -> String {
 }
 
 fn state_label(state: i32) -> &'static str {
-    match state { 3 => "PLAYING", 4 => "PAUSED", 6 => "ENDED", 7 => "ERROR", 1 | 2 => "LOADING", _ => "READY" }
+    match state { 3 => "PLAYING", 4 => "PAUSED", 5 => "STOPPED", 6 => "ENDED", 7 => "ERROR", 1 | 2 => "LOADING", _ => "READY" }
+}
+
+fn playback_placeholder(state: i32) -> &'static str {
+    match state {
+        1 | 2 => "Opening / buffering media…",
+        3 => "Playing — waiting for video frames",
+        4 => "Paused",
+        5 => "Stopped — press Space to play again",
+        6 => "Playback finished",
+        7 => "Unable to play media — check the file or stream and VLC runtime/plugins",
+        _ => "Ready — open media to start playback",
+    }
 }
 
 fn short(s: &str, limit: usize) -> String {
@@ -126,7 +138,7 @@ fn vlc_cone_logo(f: &mut Frame, area: Rect) {
 
     // 1 terminal row has 2 half-blocks vertically. To maintain authentic 1:1 square aspect ratio:
     // cone_w (columns) = cone_h (rows) * 2.
-    let max_h = area.height.min(16).max(4);
+    let max_h = area.height.clamp(4, 16);
     let mut cone_h = max_h;
     let mut cone_w = cone_h * 2;
     if cone_w > area.width {
@@ -180,7 +192,7 @@ fn empty_welcome(f: &mut Frame, area: Rect) {
     let text_y = cone_area.bottom().min(area.bottom().saturating_sub(3));
     let text_area = Rect::new(area.x, text_y, area.width, 3.min(area.height.saturating_sub(text_y.saturating_sub(area.y))));
     let text = Paragraph::new(vec![
-        Line::styled("VLC media player", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
+        Line::styled("TermVLC", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
         Line::styled("Drag and drop any media file here, or press Ctrl+O to open.", Style::default().fg(PALE)),
         Line::styled("Space: Play/Pause  -  Ctrl+O: Open File  -  F: Fullscreen  -  Tab: Playlist  -  ?: Help", Style::default().fg(DIM)),
     ]).alignment(Alignment::Center);
@@ -253,7 +265,7 @@ fn video(f: &mut Frame, image: Option<&VideoFrame>, graphics: &mut GraphicsRende
 fn subtitle(f: &mut Frame, app: &App, info: &PlaybackSnapshot, area: Rect) {
     let Some(text) = app.subtitle_text(info.time_ms) else { return; };
     if area.width < 14 || area.height < 4 { return; }
-    let text = short(text, (area.width as usize).saturating_mul(3));
+    let text = short(&text, (area.width as usize).saturating_mul(3));
     let caption_width = area.width.saturating_sub(4).max(1) as usize;
     let rows = text.lines().map(|line| line.chars().count().div_ceil(caption_width).max(1))
         .sum::<usize>().clamp(1, 3) as u16;
@@ -270,7 +282,9 @@ fn subtitle(f: &mut Frame, app: &App, info: &PlaybackSnapshot, area: Rect) {
 // ──────────────────────────────────────────────────────────────────────
 fn browser(f: &mut Frame, app: &App, area: Rect, zones: &mut HitZones) {
     if area.width <= 12 { return; }
-    let title = format!(" PLAYLIST - {} ", short(&app.cwd.to_string_lossy(), area.width.saturating_sub(16) as usize));
+    let title = if app.view_mode == ViewMode::Playlist {
+        format!(" PLAYBACK QUEUE · Repeat {:?} ", app.queue.repeat)
+    } else { format!(" FILES - {} ", short(&app.cwd.to_string_lossy(), area.width.saturating_sub(16) as usize)) };
     let block = Block::default().title(title).borders(Borders::ALL).border_style(Style::default().fg(DIM))
         .style(Style::default().bg(BG_DARK));
     let inner = block.inner(area);
@@ -279,7 +293,9 @@ fn browser(f: &mut Frame, app: &App, area: Rect, zones: &mut HitZones) {
 
     let visible = inner.height as usize;
     let first = app.selected.saturating_sub(visible.saturating_sub(1));
-    let items: Vec<_> = app.entries.iter().skip(first).take(visible).map(|p| {
+    let queue_paths: Vec<_> = app.queue.sources().iter().map(std::path::PathBuf::from).collect();
+    let entries = if app.view_mode == ViewMode::Playlist { &queue_paths } else { &app.entries };
+    let items: Vec<_> = entries.iter().skip(first).take(visible).map(|p| {
         let name = p.file_name().map(|x| x.to_string_lossy().into_owned()).unwrap_or_default();
         let prefix = if p.is_dir() { "[Dir] " } else { "      " };
         let color = if p.is_dir() { ORANGE } else { PALE };
@@ -435,7 +451,7 @@ fn overlay(f: &mut Frame, app: &App, info: &PlaybackSnapshot, image: Option<&Vid
         }
     }
     let title = match app.overlay {
-        Overlay::Help => " HELP & KEYBOARD CONTROLS - VLC media player ",
+        Overlay::Help => " HELP & KEYBOARD CONTROLS - TermVLC ",
         Overlay::Info => " MEDIA & CODEC INFORMATION ",
         Overlay::SubtitleTracks => " SUBTITLES - Enter to select - L to load external ",
         Overlay::AudioTracks => " AUDIO TRACKS - Enter to select ",
@@ -453,7 +469,7 @@ fn overlay(f: &mut Frame, app: &App, info: &PlaybackSnapshot, image: Option<&Vid
                 "n / p         Next / Previous    Shift+S / S   Subtitle tracks menu",
                 "Left / Right  Seek 10s           Shift+A / A   Audio tracks menu",
                 "Shift+Left/Rt Seek 3s            l / L         Load subtitle file",
-                "Ctrl+Left/Rt  Seek 60s           g / ,         Subtitle delay -100ms",
+                "Ctrl+Left/Rt  Seek 60s           ,             Subtitle delay -100ms",
                 "Alt+Left/Rt   Seek 5 min         h / .         Subtitle delay +100ms",
                 "+ / Ctrl+Up   Volume +5%         j / k         Audio delay -/+100ms",
                 "- / Ctrl+Down Volume -5%         ",
@@ -472,7 +488,7 @@ fn overlay(f: &mut Frame, app: &App, info: &PlaybackSnapshot, image: Option<&Vid
         }
         Overlay::Info => {
             let (w, h) = image.map(|x| (x.width, x.height)).unwrap_or((0, 0));
-            let text = format!("Media: {}\n\nPosition: {} / {}\nStatus: {}     Speed: {:.2}x\nVideo resolution: {} x {} pixels (Native Uncapped)\nAudio: {}     Volume: {}%     Audio delay: {} ms\nSubtitles: {}\nSubtitle delay: {} ms\n\nDirect hardware-accelerated decode via native LibVLC 3.x.",
+            let text = format!("Media: {}\n\nPosition: {} / {}\nStatus: {}     Speed: {:.2}x\nVideo resolution: {} x {} pixels\nAudio: {}     Volume: {}%     Audio delay: {} ms\nSubtitles: {}\nSubtitle delay: {} ms\n\nPlayback engine: LibVLC 3.x. Inline terminal rendering uses CPU buffers.",
                 app.current.as_deref().unwrap_or("None"),
                 time(info.time_ms), time(info.length_ms),
                 state_label(info.state), info.rate, w, h,
@@ -536,7 +552,9 @@ pub fn draw(
         } else if app.is_audio() {
             render_audio_card(f, app, info, video_area);
         } else {
-            empty_welcome(f, video_area);
+            if app.current.is_some() {
+                f.render_widget(Paragraph::new(playback_placeholder(info.state)).alignment(Alignment::Center), video_area);
+            } else { empty_welcome(f, video_area); }
         }
         subtitle(f, app, info, video_area);
 
@@ -601,7 +619,7 @@ pub fn draw(
             ViewMode::Player => {
                 center
             }
-            ViewMode::Playlist => {
+            ViewMode::Playlist | ViewMode::Browser => {
                 let columns = Layout::default().direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(28), Constraint::Percentage(72)])
                     .split(center);
@@ -621,7 +639,7 @@ pub fn draw(
             }
         } else if native_window {
             f.render_widget(Block::default().style(Style::default().bg(BG_DARK)), video_area);
-            f.render_widget(Paragraph::new("Native VLC window mode active\nVideo rendered with GPU acceleration.\nTUI controls remain active.")
+            f.render_widget(Paragraph::new("Native VLC window mode active\nVideo displayed in a separate window.\nTUI controls remain active.")
                 .alignment(Alignment::Center).style(Style::default().fg(DIM)), video_area);
         } else if app.is_audio() {
             render_audio_card(f, app, info, video_area);
@@ -629,7 +647,7 @@ pub fn draw(
             empty_welcome(f, video_area);
         } else {
             f.render_widget(Block::default().style(Style::default().bg(BG_DARK)), video_area);
-            f.render_widget(Paragraph::new("Opening / buffering media…")
+            f.render_widget(Paragraph::new(playback_placeholder(info.state))
                 .alignment(Alignment::Center).style(Style::default().fg(DIM)), video_area);
         }
         subtitle(f, app, info, video_area);
@@ -779,7 +797,7 @@ pub fn draw(
         // 5. Status & notification bar
         let message = if let Some(warn) = graphics.warning() { warn.to_string() }
             else if app.status_visible() { app.status.clone() }
-            else { format!("VLC media player ready  -  {}  -  Ctrl+O Open  -  Drag & drop media  -  Space Play/Pause", graphics.label()) };
+            else { format!("TermVLC ready  -  {}  -  Ctrl+O Open  -  Drag & drop media  -  Space Play/Pause", graphics.label()) };
         f.render_widget(Paragraph::new(short(&message, layout[5].width as usize))
             .style(Style::default().fg(DIM).bg(BAR_BG)), layout[5]);
     }

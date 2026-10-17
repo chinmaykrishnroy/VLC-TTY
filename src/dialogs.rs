@@ -43,7 +43,7 @@ pub fn open_file_dialog() -> Option<PathBuf> {
     // Filter string: pairs of null-terminated strings ending with double null
     let filter: Vec<u16> = "Media Files (*.mp4, *.mkv, *.avi, *.mp3...)\0*.mp4;*.mkv;*.avi;*.mov;*.webm;*.flac;*.mp3;*.wav;*.m4v;*.wmv;*.ts;*.vob;*.ogg;*.aac;*.opus;*.srt;*.vtt;*.ass\0All Files (*.*)\0*.*\0\0"
         .encode_utf16().collect();
-    let title: Vec<u16> = "Select Media - VLC media player\0".encode_utf16().collect();
+    let title: Vec<u16> = "Select Media - TermVLC\0".encode_utf16().collect();
 
     let mut ofn: OpenFileNameW = unsafe { std::mem::zeroed() };
     ofn.l_struct_size = std::mem::size_of::<OpenFileNameW>() as u32;

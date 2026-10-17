@@ -3,8 +3,8 @@
 //! No VLC header/build-time linker dependency. libloading resolves the shared
 //! library at runtime. LibVLC still requires its normal codecs/plugins on disk.
 //! Video format negotiation uses RV32 with 32-byte aligned, per-picture buffers.
-//! Unlike v0.2, frames are NOT capped at 480x300. Default cap is 1920x1080;
-//! set TERMVLC_DECODE_MAX=0 for full source resolution (large allocations!).
+//! Frames default to the source resolution. To bound CPU work,
+//! set TERMVLC_DECODE_MAX=1080; zero requests uncapped dimensions.
 //! Display callbacks publish only the *latest presented* frame; no terminal
 //! writes occur on decoder threads.
 
@@ -111,6 +111,7 @@ pub struct MediaTrack {
 struct Api {
     _library: Library,
     loaded_from: PathBuf,
+    version: String,
     new: unsafe extern "C" fn(c_int, *const *const c_char) -> *mut c_void,
     release: unsafe extern "C" fn(*mut c_void),
     media_new_path: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
@@ -121,6 +122,7 @@ struct Api {
     player_set_media: unsafe extern "C" fn(*mut c_void, *mut c_void),
     player_play: unsafe extern "C" fn(*mut c_void) -> c_int,
     player_set_pause: unsafe extern "C" fn(*mut c_void, c_int),
+    player_next_frame: unsafe extern "C" fn(*mut c_void),
     player_stop: unsafe extern "C" fn(*mut c_void),
     player_get_state: unsafe extern "C" fn(*mut c_void) -> c_int,
     player_get_time: unsafe extern "C" fn(*mut c_void) -> i64,
@@ -128,10 +130,16 @@ struct Api {
     player_set_time: unsafe extern "C" fn(*mut c_void, i64),
     audio_get_volume: unsafe extern "C" fn(*mut c_void) -> c_int,
     audio_set_volume: unsafe extern "C" fn(*mut c_void, c_int) -> c_int,
+    audio_set_delay: unsafe extern "C" fn(*mut c_void, i64) -> c_int,
+    #[cfg(test)]
+    audio_get_delay: unsafe extern "C" fn(*mut c_void) -> i64,
     player_set_rate: unsafe extern "C" fn(*mut c_void, f32) -> c_int,
     #[allow(dead_code)]
     video_get_spu: unsafe extern "C" fn(*mut c_void) -> c_int,
     video_set_spu: unsafe extern "C" fn(*mut c_void, c_int) -> c_int,
+    video_set_spu_delay: unsafe extern "C" fn(*mut c_void, i64) -> c_int,
+    #[cfg(test)]
+    video_get_spu_delay: unsafe extern "C" fn(*mut c_void) -> i64,
     video_get_spu_description: unsafe extern "C" fn(*mut c_void) -> *mut TrackDescription,
     video_set_subtitle_file: unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int,
     #[allow(dead_code)]
@@ -184,6 +192,11 @@ impl Api {
     }
 
     unsafe fn symbols(lib: Library, loaded_from: PathBuf) -> Result<Self> {
+        let get_version = lib.get::<unsafe extern "C" fn() -> *const c_char>(b"libvlc_get_version\0")?;
+        let version_ptr = get_version();
+        if version_ptr.is_null() { bail!("LibVLC returned an empty version"); }
+        let version = CStr::from_ptr(version_ptr).to_string_lossy().into_owned();
+        if !version.starts_with("3.") { bail!("LibVLC 3.x is required; found {version}"); }
         macro_rules! f { ($s:literal) => { *lib.get(concat!($s, "\0").as_bytes()).with_context(|| format!("missing VLC symbol {}", $s))? } }
         Ok(Self {
             new: f!("libvlc_new"), release: f!("libvlc_release"),
@@ -192,14 +205,21 @@ impl Api {
             player_new: f!("libvlc_media_player_new"), player_release: f!("libvlc_media_player_release"),
             player_set_media: f!("libvlc_media_player_set_media"),
             player_play: f!("libvlc_media_player_play"), player_set_pause: f!("libvlc_media_player_set_pause"),
+            player_next_frame: f!("libvlc_media_player_next_frame"),
             player_stop: f!("libvlc_media_player_stop"),
             player_get_state: f!("libvlc_media_player_get_state"),
             player_get_time: f!("libvlc_media_player_get_time"), player_get_length: f!("libvlc_media_player_get_length"),
             player_set_time: f!("libvlc_media_player_set_time"),
             audio_get_volume: f!("libvlc_audio_get_volume"), audio_set_volume: f!("libvlc_audio_set_volume"),
+            audio_set_delay: f!("libvlc_audio_set_delay"),
+            #[cfg(test)]
+            audio_get_delay: f!("libvlc_audio_get_delay"),
             player_set_rate: f!("libvlc_media_player_set_rate"),
             video_get_spu: f!("libvlc_video_get_spu"),
             video_set_spu: f!("libvlc_video_set_spu"),
+            video_set_spu_delay: f!("libvlc_video_set_spu_delay"),
+            #[cfg(test)]
+            video_get_spu_delay: f!("libvlc_video_get_spu_delay"),
             video_get_spu_description: f!("libvlc_video_get_spu_description"),
             video_set_subtitle_file: f!("libvlc_video_set_subtitle_file"),
             audio_get_track: f!("libvlc_audio_get_track"),
@@ -211,6 +231,7 @@ impl Api {
             errmsg: f!("libvlc_errmsg"),
             _library: lib,
             loaded_from,
+            version,
         })
     }
 }
@@ -320,12 +341,18 @@ impl VlcPlayer {
     pub fn new() -> Result<Self> { Self::new_with_window(false) }
 
     pub fn library_path(&self) -> &Path { &self.api.loaded_from }
+    pub fn library_version(&self) -> &str { &self.api.version }
     pub fn is_native_window(&self) -> bool { self.native_window }
 
     pub fn new_with_window(native_window: bool) -> Result<Self> {
+        Self::new_with_options(native_window, &[])
+    }
+
+    fn new_with_options(native_window: bool, options: &[&str]) -> Result<Self> {
         let api = Api::load()?;
         api.configure_plugin_path();
-        let args = [CString::new("--quiet")?, CString::new("--no-video-title-show")?];
+        let args: Vec<CString> = ["--quiet", "--no-video-title-show"].into_iter().chain(options.iter().copied())
+            .map(CString::new).collect::<std::result::Result<_, _>>()?;
         let ptrs: Vec<*const c_char> = args.iter().map(|a| a.as_ptr()).collect();
         let instance = unsafe { (api.new)(ptrs.len() as c_int, ptrs.as_ptr()) };
         if instance.is_null() { bail!("libvlc_new failed; check VLC plugins and installation") }
@@ -387,7 +414,19 @@ impl VlcPlayer {
             (self.api.player_set_time)(self.player, if length > 0 { target.min(length) } else { target });
         }
     }
-    pub fn set_volume(&mut self, volume: i32) { unsafe { (self.api.audio_set_volume)(self.player, volume); } }
+    pub fn set_volume(&mut self, volume: i32) { unsafe { (self.api.audio_set_volume)(self.player, volume.clamp(0, 125)); } }
+    pub fn next_frame(&mut self) {
+        unsafe {
+            (self.api.player_set_pause)(self.player, 1);
+            (self.api.player_next_frame)(self.player);
+        }
+    }
+    pub fn set_audio_delay(&mut self, delay_ms: i64) -> bool {
+        unsafe { (self.api.audio_set_delay)(self.player, delay_ms.saturating_mul(1000)) == 0 }
+    }
+    pub fn set_subtitle_delay(&mut self, delay_ms: i64) -> bool {
+        unsafe { (self.api.video_set_spu_delay)(self.player, delay_ms.saturating_mul(1000)) == 0 }
+    }
     pub fn rate(&self) -> f32 { self.rate }
     pub fn set_rate(&mut self, value: f32) {
         if unsafe { (self.api.player_set_rate)(self.player, value) } == 0 { self.rate = value; }
@@ -505,79 +544,147 @@ mod tests {
         assert_eq!(frame.width, w as usize);
         assert_eq!(frame.bgra[0], 42);
     }
-    #[test]
-    fn test_open_video_playback() {
-        let mut player = match VlcPlayer::new() {
-            Ok(p) => p,
-            Err(_) => return,
-        };
-        let file = r"samples\sample.mp4";
-        if std::path::Path::new(file).exists() {
-            let res = player.open(file);
-            assert!(res.is_ok(), "Failed to open video: {:?}", res);
-            std::thread::sleep(std::time::Duration::from_millis(500));
+    fn wait_for_decoded_progress(player: &VlcPlayer) {
+        let started = std::time::Instant::now();
+        while started.elapsed() < std::time::Duration::from_secs(8) {
             let snap = player.snapshot();
-            // State 3 is Playing, State 1/2 is Opening/Buffering
-            assert!(snap.state == 3 || snap.state == 1 || snap.state == 2, "Expected playing state, got {}", snap.state);
+            if snap.frames >= 3 && snap.time_ms > 200 {
+                eprintln!("Decoded {} frames; playback time {} ms", snap.frames, snap.time_ms);
+                assert!(player.latest_frame().is_some());
+                return;
+            }
+            assert_ne!(snap.state, 7, "LibVLC entered Error: {snap:?}");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("No decoded progress before timeout: {:?}", player.snapshot());
+    }
+
+    #[test]
+    #[ignore = "requires installed LibVLC 3; run with --ignored --test-threads=1"]
+    fn real_local_playback_and_controls() {
+        let mut player = VlcPlayer::new_with_options(false, &["--aout=dummy"]).expect("LibVLC 3 is required for runtime tests");
+        player.set_volume(0);
+        let sample = Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/sample.mp4");
+        player.open(sample.to_str().expect("fixture path must be UTF-8")).unwrap();
+        wait_for_decoded_progress(&player);
+        assert!(player.set_audio_delay(100));
+        assert!(player.set_subtitle_delay(-100));
+        unsafe {
+            assert_eq!((player.api.audio_get_delay)(player.player), 100_000);
+            assert_eq!((player.api.video_get_spu_delay)(player.player), -100_000);
+        }
+        player.toggle_pause();
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(player.snapshot().state, 4);
+        let before = player.snapshot().frames;
+        player.next_frame();
+        let started = std::time::Instant::now();
+        while player.snapshot().frames <= before && started.elapsed() < std::time::Duration::from_secs(2) {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(player.snapshot().frames > before, "Frame stepping must present a frame");
+        assert_eq!(player.snapshot().state, 4, "Frame stepping must leave playback paused");
+        player.seek_to(2000);
+        player.toggle_pause();
+        let started = std::time::Instant::now();
+        while player.snapshot().time_ms < 2000 && started.elapsed() < std::time::Duration::from_secs(3) {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert!(player.snapshot().time_ms >= 2000, "Seeking must advance the playback clock");
+        player.stop();
+        assert!(player.latest_frame().is_none());
+        assert_eq!(player.snapshot().state, 5);
+    }
+
+    fn http_response(request: &str, body: &[u8]) -> Vec<u8> {
+        let range = request.lines().find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("Range").then(|| value.trim())
+        });
+        let (start, end) = match range {
+            Some(value) => {
+                let (first, last) = value.strip_prefix("bytes=").unwrap_or("").split_once('-').unwrap_or(("", ""));
+                let start = first.parse::<usize>().unwrap_or(body.len());
+                let end = if last.is_empty() { body.len().saturating_sub(1) } else { last.parse::<usize>().unwrap_or(0).min(body.len().saturating_sub(1)) };
+                if start >= body.len() || start > end {
+                    return format!("HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */{}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", body.len()).into_bytes();
+                }
+                (start, end)
+            }
+            None => (0, body.len().saturating_sub(1)),
+        };
+        let data = if body.is_empty() { body } else { &body[start..=end] };
+        let status = if range.is_some() { "206 Partial Content" } else { "200 OK" };
+        let mut header = format!("HTTP/1.1 {status}\r\nContent-Type: video/mp4\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n", data.len());
+        if range.is_some() { header.push_str(&format!("Content-Range: bytes {start}-{end}/{}\r\n", body.len())); }
+        header.push_str("\r\n");
+        let mut response = header.into_bytes();
+        if !request.starts_with("HEAD ") { response.extend_from_slice(data); }
+        response
+    }
+
+    #[test]
+    fn http_fixture_supports_ranges_and_head() {
+        let response = http_response("GET /sample.mp4 HTTP/1.1\r\nRange: bytes=1-2\r\n\r\n", b"abcd");
+        let response = String::from_utf8(response).unwrap();
+        assert!(response.starts_with("HTTP/1.1 206"));
+        assert!(response.contains("Content-Range: bytes 1-2/4\r\n"));
+        assert!(response.ends_with("\r\n\r\nbc"));
+        let head = http_response("HEAD /sample.mp4 HTTP/1.1\r\n\r\n", b"abcd");
+        assert!(head.ends_with(b"\r\n\r\n"));
+        assert!(http_response("GET / HTTP/1.1\r\nRange: bytes=99-\r\n", b"abcd").starts_with(b"HTTP/1.1 416"));
+    }
+
+    struct HttpFixture {
+        port: u16,
+        running: Arc<std::sync::atomic::AtomicBool>,
+        thread: Option<std::thread::JoinHandle<()>>,
+    }
+    impl HttpFixture {
+        fn new(body: Vec<u8>) -> Self {
+            use std::{io::{Read, Write}, net::TcpListener, time::Duration};
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let alive = Arc::clone(&running);
+            let thread = std::thread::spawn(move || {
+                while alive.load(Ordering::Relaxed) {
+                    if let Ok((mut stream, _)) = listener.accept() {
+                        let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+                        let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+                        let mut request = Vec::new();
+                        let mut buffer = [0; 1024];
+                        while request.len() < 8192 && !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                            match stream.read(&mut buffer) {
+                                Ok(0) | Err(_) => break,
+                                Ok(count) => request.extend_from_slice(&buffer[..count]),
+                            }
+                        }
+                        if let Ok(request) = std::str::from_utf8(&request) { let _ = stream.write_all(&http_response(request, &body)); }
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            });
+            Self { port, running, thread: Some(thread) }
+        }
+    }
+    impl Drop for HttpFixture {
+        fn drop(&mut self) {
+            self.running.store(false, Ordering::Relaxed);
+            if let Some(thread) = self.thread.take() { thread.join().unwrap(); }
         }
     }
 
     #[test]
-    fn test_http_network_stream_playback() {
-        use std::net::TcpListener;
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::io::{Read, Write};
-
-        let mut player = match VlcPlayer::new() {
-            Ok(p) => p,
-            Err(e) => { eprintln!("LibVLC unavailable: {e:#}"); return; }
-        };
-
-        let sample = std::path::Path::new("samples/sample.mp4");
-        if !sample.exists() { return; }
-        let video_data = std::fs::read(sample).expect("read sample");
-
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind free port");
-        let port = listener.local_addr().expect("port").port();
-        let running = Arc::new(AtomicBool::new(true));
-        let r_clone = Arc::clone(&running);
-        let v_bytes = video_data.clone();
-
-        let srv = std::thread::spawn(move || {
-            listener.set_nonblocking(true).ok();
-            while r_clone.load(Ordering::Relaxed) {
-                if let Ok((mut stream, _)) = listener.accept() {
-                    let mut req_buf = [0u8; 1024];
-                    let _ = stream.read(&mut req_buf);
-                    let hdr = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: video/mp4\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n\r\n",
-                        v_bytes.len()
-                    );
-                    let _ = stream.write_all(hdr.as_bytes());
-                    let _ = stream.write_all(&v_bytes);
-                    let _ = stream.flush();
-                }
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-        });
-
-        let url = format!("http://127.0.0.1:{}/sample.mp4", port);
-        let res = player.open(&url);
-        assert!(res.is_ok(), "Failed to open network stream: {:?}", res);
-
-        let mut streaming = false;
-        for _ in 0..30 {
-            std::thread::sleep(std::time::Duration::from_millis(100));
-            let snap = player.snapshot();
-            if snap.state == 3 || snap.state == 2 || snap.frames > 0 {
-                streaming = true;
-                break;
-            }
-        }
-        assert!(streaming, "Network stream failed to start playing");
-
+    #[ignore = "requires installed LibVLC 3 and loopback sockets; run with --ignored --test-threads=1"]
+    fn real_http_playback_decodes_frames() {
+        let sample = Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/sample.mp4");
+        let server = HttpFixture::new(std::fs::read(sample).unwrap());
+        let mut player = VlcPlayer::new_with_options(false, &["--aout=dummy"]).expect("LibVLC 3 is required for runtime tests");
+        player.set_volume(0);
+        player.open(&format!("http://127.0.0.1:{}/sample.mp4", server.port)).unwrap();
+        wait_for_decoded_progress(&player);
         player.stop();
-        running.store(false, Ordering::Relaxed);
-        let _ = srv.join();
     }
 }

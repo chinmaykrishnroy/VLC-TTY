@@ -2,13 +2,17 @@
 use std::{fs, path::{Path, PathBuf}, sync::Arc, time::{Duration, Instant}};
 use anyhow::Result;
 use ratatui::{layout::Rect, crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind}};
-use crate::{renderer::time, subtitles::SubtitleFile, vlc::{VideoFrame, VlcPlayer}};
+use crate::{playback::Playback, renderer::time, subtitles::SubtitleFile, vlc::VideoFrame};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewMode {
     Player,
     Playlist,
+    Browser,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AppEffect { Continue, Quit, ToggleRenderer }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Overlay { None, Help, Info, SubtitleTracks, AudioTracks }
@@ -82,6 +86,7 @@ impl MenuKind {
                 "Jump Forward 10s           Right",
                 "Jump Backward 10s          Left",
                 "Next Frame                 E",
+                "Repeat: Off / All / One",
             ],
             Self::Audio => &[
                 "Cycle Audio Track          B",
@@ -99,7 +104,7 @@ impl MenuKind {
                 "Subtitle Tracks Menu...    Shift+S",
                 "Add Subtitle File...       L",
                 "Delay +100 ms              . / H",
-                "Delay -100 ms              , / G",
+                "Delay -100 ms              ,",
             ],
             Self::Tools => &[
                 "Media Information          Ctrl+I",
@@ -107,10 +112,11 @@ impl MenuKind {
             Self::View => &[
                 "Toggle Playlist / Player   Tab / Ctrl+L",
                 "Refresh Library Files      R",
+                "Browse Files",
             ],
             Self::Help => &[
                 "Help & Controls            F1 / ?",
-                "About VLC media player",
+                "About TermVLC",
             ],
         }
     }
@@ -149,6 +155,8 @@ fn is_subtitle_path(p: &Path) -> bool {
 
 #[derive(Debug)]
 pub struct App {
+    pub queue: crate::queue::PlaybackQueue,
+    last_state: i32,
     pub cwd: PathBuf,
     pub entries: Vec<PathBuf>,
     pub selected: usize,
@@ -175,6 +183,7 @@ pub struct App {
     pub active_menu: Option<MenuKind>,
     pub menu_selected: usize,
     pub audio_metadata: Option<crate::metadata::AudioMetadata>,
+    pending_native_subtitle: Option<PathBuf>,
 }
 
 fn supported(p: &Path) -> bool {
@@ -188,17 +197,33 @@ fn supported(p: &Path) -> bool {
 }
 
 impl App {
+    pub fn handle_event(&mut self, event: ratatui::crossterm::event::Event, zones: &HitZones, player: &mut dyn Playback) -> Result<AppEffect> {
+        use ratatui::crossterm::event::{Event, KeyEventKind};
+        match event {
+            Event::Key(key) if key.kind == KeyEventKind::Press => {
+                if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) { return Ok(AppEffect::Quit); }
+                self.handle_key(key, player)
+            }
+            Event::Mouse(mouse) => self.handle_mouse(mouse, zones, player),
+            Event::Paste(text) => {
+                if let Err(error) = self.handle_drop_or_paste(&text, player) { self.notify(format!("Open error: {error:#}")); }
+                Ok(AppEffect::Continue)
+            }
+            _ => Ok(AppEffect::Continue),
+        }
+    }
     pub fn new(path: Option<&Path>) -> Self {
         let resolved = path.unwrap_or_else(|| Path::new("."));
         let cwd = if resolved.is_dir() { resolved.to_path_buf() }
             else { resolved.parent().unwrap_or_else(|| Path::new(".")).to_path_buf() };
         let is_dir_arg = path.is_some_and(|p| p.is_dir());
         let mut app = Self {
+            queue: crate::queue::PlaybackQueue::default(), last_state: 0,
             cwd, entries: vec![], selected: 0, current: None,
-            status: "VLC media player ready. Drag and drop media or press Ctrl+O to open.".into(),
+            status: "TermVLC ready. Drag and drop media or press Ctrl+O to open.".into(),
             status_at: Instant::now(), fullscreen: false,
             // Default to Player view (exact VLC home page / video view) unless launched on a directory
-            view_mode: if is_dir_arg { ViewMode::Playlist } else { ViewMode::Player },
+            view_mode: if is_dir_arg { ViewMode::Browser } else { ViewMode::Player },
             overlay: Overlay::None, input: None, tracks: vec![], track_selected: 0,
             volume: 100, saved_volume: 100, sidecar: None, sidecar_enabled: false,
             subtitle_delay_ms: 0, audio_delay_ms: 0, selected_subtitle: "Off".into(),
@@ -206,6 +231,7 @@ impl App {
             last_video_click: None,
             active_menu: None, menu_selected: 0,
             audio_metadata: None,
+            pending_native_subtitle: None,
         };
         app.refresh();
         if resolved.is_file() {
@@ -237,8 +263,21 @@ impl App {
         self.last_osd = Instant::now() - Duration::from_secs(10);
     }
 
-    pub fn open_media(&mut self, source: &str, player: &mut VlcPlayer) -> Result<()> {
+    pub fn open_media(&mut self, source: &str, player: &mut dyn Playback) -> Result<()> {
         player.open(source)?;
+        let normalized = if source.contains("://") { source.to_owned() }
+            else { Path::new(source).canonicalize().unwrap_or_else(|_| PathBuf::from(source)).to_string_lossy().into_owned() };
+        let source = normalized.as_str();
+        let siblings = if source.contains("://") { vec![source.to_owned()] } else {
+            Path::new(source).parent().and_then(|folder| fs::read_dir(folder).ok())
+                .into_iter().flatten().filter_map(Result::ok).map(|entry| entry.path())
+                .filter(|path| path.is_file() && supported(path))
+                .map(|path| path.to_string_lossy().into_owned()).collect::<Vec<_>>()
+        };
+        let mut siblings = siblings;
+        siblings.sort_by_key(|source| source.to_lowercase());
+        self.queue.select(source, siblings);
+        self.last_state = 0;
         self.current = Some(source.to_owned());
         self.view_mode = ViewMode::Player; // Immediately switch to player view like VLC desktop
         self.overlay = Overlay::None;
@@ -253,12 +292,15 @@ impl App {
 
         self.sidecar = if source.contains("://") { None } else { SubtitleFile::discover(Path::new(source)) };
         self.sidecar_enabled = self.sidecar.is_some();
+        self.pending_native_subtitle = None;
         self.subtitle_delay_ms = 0;
+        self.audio_delay_ms = 0;
+        self.selected_audio = "Default".into();
+        self.last_video_click = None;
         if self.sidecar_enabled {
             if player.is_native_window() {
-                if let Some(ref sidecar) = self.sidecar {
-                    if player.load_vlc_subtitle(&sidecar.path).is_ok() { self.sidecar_enabled = false; }
-                }
+                self.pending_native_subtitle = self.sidecar.as_ref().map(|sidecar| sidecar.path.clone());
+                self.sidecar_enabled = false;
             } else {
                 player.select_subtitle(-1);
             }
@@ -279,7 +321,13 @@ impl App {
         self.selected = self.selected.min(self.entries.len().saturating_sub(1));
     }
 
-    pub fn enter(&mut self, player: &mut VlcPlayer) -> Result<()> {
+    pub fn enter(&mut self, player: &mut dyn Playback) -> Result<()> {
+        if self.view_mode == ViewMode::Playlist {
+            if let Some(source) = self.queue.sources().get(self.selected).cloned() {
+                if let Err(error) = self.open_media(&source, player) { self.notify(format!("Open error: {error:#}")); }
+            }
+            return Ok(());
+        }
         if let Some(p) = self.entries.get(self.selected).cloned() {
             if p.is_dir() { self.cwd = p; self.selected = 0; self.refresh(); }
             else if let Err(e) = self.open_media(&p.to_string_lossy(), player) { self.notify(format!("Open error: {e:#}")); }
@@ -291,23 +339,46 @@ impl App {
         if let Some(parent) = self.cwd.parent() { self.cwd = parent.to_path_buf(); self.selected = 0; self.refresh(); }
     }
 
-    pub fn adjacent(&mut self, player: &mut VlcPlayer, step: isize) {
-        let files: Vec<PathBuf> = self.entries.iter().filter(|p| p.is_file()).cloned().collect();
-        if files.is_empty() { self.notify("No media in this directory"); return; }
-        let current = self.current.as_ref().map(Path::new);
-        let idx = current.and_then(|p| files.iter().position(|q| q.as_path() == p));
-        let next = match idx { Some(i) => (i as isize + step).rem_euclid(files.len() as isize) as usize,
-            None if step < 0 => files.len() - 1, None => 0 };
-        if let Some(sel) = self.entries.iter().position(|p| p == &files[next]) { self.selected = sel; }
-        if let Err(e) = self.open_media(&files[next].to_string_lossy(), player) { self.notify(format!("Open error: {e:#}")); }
+    pub fn adjacent(&mut self, player: &mut dyn Playback, step: isize) {
+        let Some(source) = self.queue.adjacent(step, false).map(str::to_owned) else {
+            self.notify(if step < 0 { "Start of playback queue" } else { "End of playback queue" });
+            return;
+        };
+        if let Err(error) = self.open_media(&source, player) { self.notify(format!("Open error: {error:#}")); }
     }
 
-    pub fn subtitle_text(&self, time_ms: i64) -> Option<&str> {
+    pub fn tick(&mut self, player: &mut dyn Playback) {
+        let state = player.snapshot().state;
+        if state == self.last_state { return; }
+        self.last_state = state;
+        if state == 3 {
+            if let Some(path) = self.pending_native_subtitle.take() {
+                if let Err(error) = player.load_vlc_subtitle(&path) { self.notify(format!("Subtitle error: {error:#}")); }
+            } else if self.sidecar_enabled { player.select_subtitle(-1); }
+        }
+        if state == 7 { self.notify("Playback failed. Check the file, stream address, and VLC runtime/plugins."); }
+        if state == 6 {
+            if let Some(source) = self.queue.adjacent(1, true).map(str::to_owned) {
+                if let Err(error) = self.open_media(&source, player) { self.notify(format!("Open error: {error:#}")); }
+            } else { self.notify("End of playback queue"); }
+        }
+    }
+
+    fn list_len(&self) -> usize {
+        if self.view_mode == ViewMode::Playlist { self.queue.sources().len() } else { self.entries.len() }
+    }
+
+    fn toggle_playlist(&mut self) {
+        self.view_mode = if self.view_mode == ViewMode::Player { ViewMode::Playlist } else { ViewMode::Player };
+        self.selected = 0;
+    }
+
+    pub fn subtitle_text(&self, time_ms: i64) -> Option<std::borrow::Cow<'_, str>> {
         if self.sidecar_enabled { self.sidecar.as_ref()?.current(time_ms, self.subtitle_delay_ms) }
         else { None }
     }
 
-    pub fn load_subtitle(&mut self, path: &Path, player: &mut VlcPlayer) -> Result<()> {
+    pub fn load_subtitle(&mut self, path: &Path, player: &mut dyn Playback) -> Result<()> {
         let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("").to_ascii_lowercase();
         if (ext == "srt" || ext == "vtt") && !player.is_native_window() {
             let captions = SubtitleFile::load(path)?;
@@ -325,7 +396,7 @@ impl App {
         Ok(())
     }
 
-    pub fn open_tracks(&mut self, which: Overlay, player: &VlcPlayer) {
+    pub fn open_tracks(&mut self, which: Overlay, player: &dyn Playback) {
         self.overlay = which;
         self.active_menu = None;
         let mut options = Vec::new();
@@ -350,86 +421,100 @@ impl App {
         self.last_osd = Instant::now();
     }
 
-    pub fn cycle_subtitle(&mut self, player: &mut VlcPlayer) {
+    pub fn cycle_subtitle(&mut self, player: &mut dyn Playback) {
         let mut tracks: Vec<(i32, String)> = vec![(-1, "Off".to_string())];
-        if let Some(ref s) = self.sidecar {
+        if !player.is_native_window() { if let Some(ref s) = self.sidecar {
             tracks.push((-2, format!("External: {}", s.path.file_name().unwrap_or_default().to_string_lossy())));
-        }
+        } }
         for t in player.subtitle_tracks() {
             if t.id != -1 { tracks.push((t.id, t.name)); }
         }
         if tracks.is_empty() { self.notify("No subtitle tracks"); return; }
-        let cur_id = player.current_subtitle_id();
+        let cur_id = if self.sidecar_enabled { -2 } else { player.current_subtitle_id() };
         let cur_idx = tracks.iter().position(|(id, _)| *id == cur_id).unwrap_or(0);
         let next_idx = (cur_idx + 1) % tracks.len();
         let (next_id, ref name) = tracks[next_idx];
         if next_id == -2 {
+            if !player.select_subtitle(-1) { self.notify("Couldn't disable the embedded subtitle track"); return; }
             self.sidecar_enabled = true;
         } else {
+            if !player.select_subtitle(next_id) { self.notify("Couldn't activate this subtitle track"); return; }
             self.sidecar_enabled = false;
-            player.select_subtitle(next_id);
         }
         self.selected_subtitle = name.clone();
         self.notify(format!("Subtitles: {}", name));
     }
 
-    pub fn cycle_audio(&mut self, player: &mut VlcPlayer) {
+    fn adjust_audio_delay(&mut self, delta_ms: i64, player: &mut dyn Playback) {
+        let delay = self.audio_delay_ms.saturating_add(delta_ms);
+        if player.set_audio_delay(delay) {
+            self.audio_delay_ms = delay;
+            self.notify(format!("Audio delay: {delay} ms"));
+        } else { self.notify("Audio delay unavailable; start playback first"); }
+    }
+
+    fn adjust_subtitle_delay(&mut self, delta_ms: i64, player: &mut dyn Playback) {
+        let delay = self.subtitle_delay_ms.saturating_add(delta_ms);
+        if self.sidecar_enabled || player.set_subtitle_delay(delay) {
+            self.subtitle_delay_ms = delay;
+            self.notify(format!("Subtitle delay: {delay} ms"));
+        } else { self.notify("Subtitle delay unavailable; start playback first"); }
+    }
+
+    pub fn cycle_audio(&mut self, player: &mut dyn Playback) {
         let tracks: Vec<_> = player.audio_tracks().into_iter().filter(|t| t.id >= 0).collect();
         if tracks.is_empty() { self.notify("No audio tracks"); return; }
         let cur_id = player.current_audio_id();
         let cur_idx = tracks.iter().position(|t| t.id == cur_id).unwrap_or(0);
         let next_idx = (cur_idx + 1) % tracks.len();
         let next = &tracks[next_idx];
-        player.select_audio(next.id);
+        if !player.select_audio(next.id) { self.notify("Couldn't activate this audio track"); return; }
         self.selected_audio = next.name.clone();
         self.notify(format!("Audio: {}", next.name));
     }
 
-    fn choose_track(&mut self, player: &mut VlcPlayer) {
+    fn choose_track(&mut self, player: &mut dyn Playback) {
         if let Some(option) = self.tracks.get(self.track_selected).cloned() {
-            match option.action {
+            let success = match option.action {
                 TrackAction::SubtitleOff => {
-                    player.select_subtitle(-1);
-                    self.sidecar_enabled = false;
-                    self.selected_subtitle = "Off".into();
+                    let success = player.select_subtitle(-1);
+                    if success { self.sidecar_enabled = false; self.selected_subtitle = "Off".into(); }
+                    success
                 }
                 TrackAction::SubtitleExternal => {
-                    if player.is_native_window() {
-                        if let Some(ref sidecar) = self.sidecar {
-                            if player.load_vlc_subtitle(&sidecar.path).is_ok() {
-                                self.selected_subtitle = option.label.clone();
-                            }
-                        }
-                    } else {
-                        player.select_subtitle(-1);
-                        self.sidecar_enabled = true;
+                    let success = if player.is_native_window() {
+                        self.sidecar.as_ref().is_some_and(|sidecar| player.load_vlc_subtitle(&sidecar.path).is_ok())
+                    } else { player.select_subtitle(-1) };
+                    if success {
+                        self.sidecar_enabled = !player.is_native_window();
                         self.selected_subtitle = option.label.clone();
                     }
+                    success
                 }
                 TrackAction::SubtitleEmbedded(id) => {
-                    if player.select_subtitle(id) {
-                        self.sidecar_enabled = false;
-                        self.selected_subtitle = option.label.clone();
-                    } else { self.notify("Couldn't activate this subtitle track"); }
+                    let success = player.select_subtitle(id);
+                    if success { self.sidecar_enabled = false; self.selected_subtitle = option.label.clone(); }
+                    success
                 }
                 TrackAction::Audio(id) => {
-                    if player.select_audio(id) { self.selected_audio = option.label.clone(); }
-                    else { self.notify("Couldn't activate this audio track"); }
+                    let success = player.select_audio(id);
+                    if success { self.selected_audio = option.label.clone(); }
+                    success
                 }
-            }
-            self.notify(format!("Track: {}", option.label));
+            };
+            if success { self.notify(format!("Track: {}", option.label)); }
+            else { self.notify(format!("Couldn't activate track: {}", option.label)); }
         }
         self.overlay = Overlay::None;
     }
-
-    fn accept_input(&mut self, player: &mut VlcPlayer) {
+    fn accept_input(&mut self, player: &mut dyn Playback) {
         let Some(dialog) = self.input.take() else { return };
         let value = dialog.text.trim().trim_matches('"');
         if value.is_empty() { return; }
         match dialog.purpose {
             InputPurpose::Media => {
                 let p = Path::new(value);
-                if p.is_dir() { self.cwd = p.to_path_buf(); self.selected = 0; self.refresh(); self.view_mode = ViewMode::Playlist; }
+                if p.is_dir() { self.cwd = p.to_path_buf(); self.selected = 0; self.refresh(); self.view_mode = ViewMode::Browser; }
                 else if let Err(e) = self.open_media(value, player) { self.notify(format!("Open error: {e:#}")); }
             }
             InputPurpose::Subtitle => {
@@ -439,7 +524,7 @@ impl App {
     }
 
     /// Handles both clipboard pasting and direct file/directory drag-and-drop.
-    pub fn handle_drop_or_paste(&mut self, text: &str, player: &mut VlcPlayer) -> Result<()> {
+    pub fn handle_drop_or_paste(&mut self, text: &str, player: &mut dyn Playback) -> Result<()> {
         let trimmed = text.trim()
             .trim_start_matches('&')
             .trim()
@@ -464,7 +549,7 @@ impl App {
             self.cwd = path.to_path_buf();
             self.selected = 0;
             self.refresh();
-            self.view_mode = ViewMode::Playlist;
+            self.view_mode = ViewMode::Browser;
             self.notify(format!("[Folder] Switched to: {}", path.display()));
         } else if is_subtitle_path(path) {
             self.load_subtitle(path, player)?;
@@ -477,15 +562,17 @@ impl App {
     }
 
     /// Trigger native desktop Open File dialog.
-    pub fn open_file_picker(&mut self, player: &mut VlcPlayer) -> Result<()> {
+    pub fn open_file_picker(&mut self, player: &mut dyn Playback) -> Result<()> {
         if let Some(path) = crate::dialogs::open_file_dialog() {
             let p_str = path.to_string_lossy().to_string();
             self.handle_drop_or_paste(&p_str, player)?;
+        } else if !cfg!(windows) {
+            self.input = Some(InputDialog { purpose: InputPurpose::Media, text: String::new() });
         }
         Ok(())
     }
 
-    pub fn trigger_menu_action(&mut self, menu: MenuKind, item_idx: usize, player: &mut VlcPlayer) -> Result<bool> {
+    pub fn trigger_menu_action(&mut self, menu: MenuKind, item_idx: usize, player: &mut dyn Playback) -> Result<AppEffect> {
         self.active_menu = None;
         match (menu, item_idx) {
             // Media
@@ -493,7 +580,7 @@ impl App {
             (MenuKind::Media, 1) => self.input = Some(InputDialog { purpose: InputPurpose::Media, text: String::new() }),
             (MenuKind::Media, 2) => self.input = Some(InputDialog { purpose: InputPurpose::Media, text: String::new() }),
             (MenuKind::Media, 3) => self.input = Some(InputDialog { purpose: InputPurpose::Media, text: self.cwd.to_string_lossy().into_owned() }),
-            (MenuKind::Media, 4) => return Ok(false), // quit
+            (MenuKind::Media, 4) => return Ok(AppEffect::Quit), // quit
 
             // Playback
             (MenuKind::Playback, 0) => { player.toggle_pause(); self.last_osd = Instant::now(); }
@@ -505,13 +592,14 @@ impl App {
             (MenuKind::Playback, 6) => { player.set_rate(1.0); self.notify("Speed: 1.00x"); }
             (MenuKind::Playback, 7) => { player.seek_relative(10_000); self.last_osd = Instant::now(); }
             (MenuKind::Playback, 8) => { player.seek_relative(-10_000); self.last_osd = Instant::now(); }
-            (MenuKind::Playback, 9) => { player.seek_relative(40); self.last_osd = Instant::now(); self.notify("Next frame"); }
+            (MenuKind::Playback, 9) => { player.next_frame(); self.last_osd = Instant::now(); self.notify("Next frame"); }
+            (MenuKind::Playback, 10) => { self.queue.cycle_repeat(); self.notify(format!("Repeat: {:?}", self.queue.repeat)); }
 
             // Audio
             (MenuKind::Audio, 0) => self.cycle_audio(player),
             (MenuKind::Audio, 1) => self.open_tracks(Overlay::AudioTracks, player),
             (MenuKind::Audio, 2) => { self.volume = (self.volume + 5).min(125); player.set_volume(self.volume); self.notify(format!("Volume: {}%", self.volume)); }
-            (MenuKind::Audio, 3) => { self.volume = self.volume.saturating_sub(5); player.set_volume(self.volume); self.notify(format!("Volume: {}%", self.volume)); }
+            (MenuKind::Audio, 3) => { self.volume = self.volume.saturating_sub(5).max(0); player.set_volume(self.volume); self.notify(format!("Volume: {}%", self.volume)); }
             (MenuKind::Audio, 4) => {
                 if self.volume > 0 { self.saved_volume = self.volume; self.volume = 0; }
                 else { self.volume = self.saved_volume.max(10); }
@@ -521,41 +609,42 @@ impl App {
 
             // Video
             (MenuKind::Video, 0) => self.toggle_fullscreen(),
-            (MenuKind::Video, 1) => { /* Graphics toggle handled in main */ }
+            (MenuKind::Video, 1) => return Ok(AppEffect::ToggleRenderer),
 
             // Subtitle
             (MenuKind::Subtitle, 0) => self.cycle_subtitle(player),
             (MenuKind::Subtitle, 1) => self.open_tracks(Overlay::SubtitleTracks, player),
             (MenuKind::Subtitle, 2) => self.input = Some(InputDialog { purpose: InputPurpose::Subtitle, text: String::new() }),
-            (MenuKind::Subtitle, 3) => { self.subtitle_delay_ms += 100; self.notify(format!("Subtitle delay: {} ms", self.subtitle_delay_ms)); }
-            (MenuKind::Subtitle, 4) => { self.subtitle_delay_ms -= 100; self.notify(format!("Subtitle delay: {} ms", self.subtitle_delay_ms)); }
+            (MenuKind::Subtitle, 3) => { self.adjust_subtitle_delay(100, player); }
+            (MenuKind::Subtitle, 4) => { self.adjust_subtitle_delay(-100, player); }
 
             // Tools
             (MenuKind::Tools, 0) => self.overlay = Overlay::Info,
 
             // View
-            (MenuKind::View, 0) => self.view_mode = if self.view_mode == ViewMode::Player { ViewMode::Playlist } else { ViewMode::Player },
+            (MenuKind::View, 0) => self.toggle_playlist(),
             (MenuKind::View, 1) => self.refresh(),
+            (MenuKind::View, 2) => { self.view_mode = ViewMode::Browser; self.selected = 0; self.refresh(); },
 
             // Help
             (MenuKind::Help, 0) | (MenuKind::Help, 1) => self.overlay = Overlay::Help,
             _ => {}
         }
-        Ok(true)
+        Ok(AppEffect::Continue)
     }
 
-    pub fn handle_key(&mut self, key: KeyEvent, player: &mut VlcPlayer) -> Result<bool> {
+    pub fn handle_key(&mut self, key: KeyEvent, player: &mut dyn Playback) -> Result<AppEffect> {
         if let Some(ref mut dialog) = self.input {
             match key.code {
                 KeyCode::Esc => self.input = None,
                 KeyCode::Enter => self.accept_input(player),
                 KeyCode::Backspace => { dialog.text.pop(); },
-                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if dialog.text.len() < 4096 { dialog.text.push(c); }
+                KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) && dialog.text.len() < 4096 => {
+                    dialog.text.push(c);
                 },
                 _ => {}
             }
-            return Ok(true);
+            return Ok(AppEffect::Continue);
         }
 
         // Active VLC menu bar dropdown navigation
@@ -582,7 +671,7 @@ impl App {
                 KeyCode::Enter => return self.trigger_menu_action(menu, self.menu_selected, player),
                 _ => {}
             }
-            return Ok(true);
+            return Ok(AppEffect::Continue);
         }
 
         if self.overlay == Overlay::SubtitleTracks || self.overlay == Overlay::AudioTracks {
@@ -593,7 +682,7 @@ impl App {
                 KeyCode::Enter => { self.choose_track(player); self.overlay = Overlay::None; }
                 _ => {}
             }
-            return Ok(true);
+            return Ok(AppEffect::Continue);
         }
 
         if self.overlay != Overlay::None {
@@ -601,50 +690,50 @@ impl App {
                 KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('i') | KeyCode::Char('?') | KeyCode::F(1) => self.overlay = Overlay::None,
                 _ => {}
             }
-            return Ok(true);
+            return Ok(AppEffect::Continue);
         }
 
         // Ctrl combinations (standard VLC desktop shortcuts)
         if key.modifiers.contains(KeyModifiers::CONTROL) {
             match key.code {
-                KeyCode::Char('o') => { self.open_file_picker(player)?; return Ok(true); }
+                KeyCode::Char('o') => { self.open_file_picker(player)?; return Ok(AppEffect::Continue); }
                 KeyCode::Char('n') | KeyCode::Char('u') => {
                     self.input = Some(InputDialog { purpose: InputPurpose::Media, text: String::new() });
-                    return Ok(true);
+                    return Ok(AppEffect::Continue);
                 }
                 KeyCode::Char('d') => {
                     self.input = Some(InputDialog { purpose: InputPurpose::Media, text: self.cwd.to_string_lossy().into_owned() });
-                    return Ok(true);
+                    return Ok(AppEffect::Continue);
                 }
                 KeyCode::Char('l') => {
-                    self.view_mode = if self.view_mode == ViewMode::Player { ViewMode::Playlist } else { ViewMode::Player };
-                    return Ok(true);
+                    self.toggle_playlist();
+                    return Ok(AppEffect::Continue);
                 }
-                KeyCode::Char('i') => { self.overlay = Overlay::Info; return Ok(true); }
-                KeyCode::Char('q') => return Ok(false),
+                KeyCode::Char('i') => { self.overlay = Overlay::Info; return Ok(AppEffect::Continue); }
+                KeyCode::Char('q') => return Ok(AppEffect::Quit),
                 KeyCode::Up => {
                     self.volume = (self.volume + 5).min(125);
                     player.set_volume(self.volume);
                     self.notify(format!("Volume: {}%", self.volume));
-                    return Ok(true);
+                    return Ok(AppEffect::Continue);
                 }
                 KeyCode::Down => {
-                    self.volume = self.volume.saturating_sub(5);
+                    self.volume = self.volume.saturating_sub(5).max(0);
                     player.set_volume(self.volume);
                     self.notify(format!("Volume: {}%", self.volume));
-                    return Ok(true);
+                    return Ok(AppEffect::Continue);
                 }
                 KeyCode::Left => {
                     player.seek_relative(-60_000); // 1 minute backward
                     self.last_osd = Instant::now();
                     self.notify("Seek -1 min");
-                    return Ok(true);
+                    return Ok(AppEffect::Continue);
                 }
                 KeyCode::Right => {
                     player.seek_relative(60_000); // 1 minute forward
                     self.last_osd = Instant::now();
                     self.notify("Seek +1 min");
-                    return Ok(true);
+                    return Ok(AppEffect::Continue);
                 }
                 _ => {}
             }
@@ -657,13 +746,13 @@ impl App {
                     player.seek_relative(-300_000); // 5 minutes backward
                     self.last_osd = Instant::now();
                     self.notify("Seek -5 min");
-                    return Ok(true);
+                    return Ok(AppEffect::Continue);
                 }
                 KeyCode::Right => {
                     player.seek_relative(300_000); // 5 minutes forward
                     self.last_osd = Instant::now();
                     self.notify("Seek +5 min");
-                    return Ok(true);
+                    return Ok(AppEffect::Continue);
                 }
                 _ => {}
             }
@@ -675,22 +764,22 @@ impl App {
                 KeyCode::Left => {
                     player.seek_relative(-3_000); // 3 seconds backward
                     self.last_osd = Instant::now();
-                    return Ok(true);
+                    return Ok(AppEffect::Continue);
                 }
                 KeyCode::Right => {
                     player.seek_relative(3_000); // 3 seconds forward
                     self.last_osd = Instant::now();
-                    return Ok(true);
+                    return Ok(AppEffect::Continue);
                 }
-                KeyCode::Char('S') => { self.open_tracks(Overlay::SubtitleTracks, player); return Ok(true); }
-                KeyCode::Char('A') => { self.open_tracks(Overlay::AudioTracks, player); return Ok(true); }
+                KeyCode::Char('S') => { self.open_tracks(Overlay::SubtitleTracks, player); return Ok(AppEffect::Continue); }
+                KeyCode::Char('A') => { self.open_tracks(Overlay::AudioTracks, player); return Ok(AppEffect::Continue); }
                 _ => {}
             }
         }
 
         // Standard key bindings
         match key.code {
-            KeyCode::Char('q') => return Ok(false),
+            KeyCode::Char('q') => return Ok(AppEffect::Quit),
             KeyCode::Esc => { if self.fullscreen { self.toggle_fullscreen(); } },
             KeyCode::F(11) | KeyCode::Char('f') => self.toggle_fullscreen(),
             KeyCode::Char(' ') => { player.toggle_pause(); self.last_osd = Instant::now(); },
@@ -698,7 +787,7 @@ impl App {
             KeyCode::Left => { player.seek_relative(-10_000); self.last_osd = Instant::now(); },
             KeyCode::Right => { player.seek_relative(10_000); self.last_osd = Instant::now(); },
             KeyCode::Char('+') => { self.volume = (self.volume + 5).min(125); player.set_volume(self.volume); self.notify(format!("Volume: {}%", self.volume)); },
-            KeyCode::Char('-') => { self.volume = self.volume.saturating_sub(5); player.set_volume(self.volume); self.notify(format!("Volume: {}%", self.volume)); },
+            KeyCode::Char('-') => { self.volume = self.volume.saturating_sub(5).max(0); player.set_volume(self.volume); self.notify(format!("Volume: {}%", self.volume)); },
             KeyCode::Char('m') => {
                 if self.volume > 0 { self.saved_volume = self.volume; self.volume = 0; }
                 else { self.volume = self.saved_volume.max(10); }
@@ -708,7 +797,7 @@ impl App {
             KeyCode::Char('[') => { player.set_rate((player.rate() - 0.25).max(0.25)); self.notify(format!("Speed {:.2}x", player.rate())); },
             KeyCode::Char(']') => { player.set_rate((player.rate() + 0.25).min(4.0)); self.notify(format!("Speed {:.2}x", player.rate())); },
             KeyCode::Char('=') => { player.set_rate(1.0); self.notify("Speed: 1.00x"); },
-            KeyCode::Char('e') => { player.seek_relative(40); self.last_osd = Instant::now(); self.notify("Next frame"); },
+            KeyCode::Char('e') => { player.next_frame(); self.last_osd = Instant::now(); self.notify("Next frame"); },
             KeyCode::Char('t') => {
                 let snap = player.snapshot();
                 self.last_osd = Instant::now();
@@ -720,31 +809,32 @@ impl App {
             KeyCode::Char('o') => self.open_file_picker(player)?,
             KeyCode::Char('?') | KeyCode::F(1) => self.overlay = Overlay::Help,
             KeyCode::Char('i') => self.overlay = Overlay::Info,
-            KeyCode::Char(',') | KeyCode::Char('g') => { self.subtitle_delay_ms -= 100; self.notify(format!("Subtitle delay: {} ms", self.subtitle_delay_ms)); },
-            KeyCode::Char('.') | KeyCode::Char('h') => { self.subtitle_delay_ms += 100; self.notify(format!("Subtitle delay: {} ms", self.subtitle_delay_ms)); },
-            KeyCode::Char('j') if self.view_mode != ViewMode::Playlist => { self.audio_delay_ms -= 100; self.notify(format!("Audio delay: {} ms", self.audio_delay_ms)); },
-            KeyCode::Char('k') if self.view_mode != ViewMode::Playlist => { self.audio_delay_ms += 100; self.notify(format!("Audio delay: {} ms", self.audio_delay_ms)); },
+            KeyCode::Char(',') => { self.adjust_subtitle_delay(-100, player); },
+            KeyCode::Char('g') => return Ok(AppEffect::ToggleRenderer),
+            KeyCode::Char('.') | KeyCode::Char('h') => { self.adjust_subtitle_delay(100, player); },
+            KeyCode::Char('j') if self.view_mode == ViewMode::Player => { self.adjust_audio_delay(-100, player); },
+            KeyCode::Char('k') if self.view_mode == ViewMode::Player => { self.adjust_audio_delay(100, player); },
             KeyCode::Char('n') => self.adjacent(player, 1),
             KeyCode::Char('p') => self.adjacent(player, -1),
-            KeyCode::Tab => self.view_mode = if self.view_mode == ViewMode::Player { ViewMode::Playlist } else { ViewMode::Player },
-            KeyCode::Up | KeyCode::Char('k') if self.view_mode == ViewMode::Playlist && !self.fullscreen => {
+            KeyCode::Tab => self.toggle_playlist(),
+            KeyCode::Up | KeyCode::Char('k') if self.view_mode != ViewMode::Player && !self.fullscreen => {
                 self.selected = self.selected.saturating_sub(1);
             }
-            KeyCode::Down | KeyCode::Char('j') if self.view_mode == ViewMode::Playlist && !self.fullscreen => {
-                self.selected = (self.selected + 1).min(self.entries.len().saturating_sub(1));
+            KeyCode::Down | KeyCode::Char('j') if self.view_mode != ViewMode::Player && !self.fullscreen => {
+                self.selected = (self.selected + 1).min(self.list_len().saturating_sub(1));
             }
             KeyCode::Backspace if self.fullscreen => self.toggle_fullscreen(),
-            KeyCode::Backspace if self.view_mode == ViewMode::Playlist => self.parent(),
-            KeyCode::Enter if self.view_mode == ViewMode::Playlist && !self.fullscreen => self.enter(player)?,
+            KeyCode::Backspace if self.view_mode == ViewMode::Browser => self.parent(),
+            KeyCode::Enter if self.view_mode != ViewMode::Player && !self.fullscreen => self.enter(player)?,
             KeyCode::Char('r') => self.refresh(),
             _ => {}
         }
-        Ok(true)
+        Ok(AppEffect::Continue)
     }
 
-    pub fn handle_mouse(&mut self, evt: MouseEvent, zones: &HitZones, player: &mut VlcPlayer) -> Result<()> {
+    pub fn handle_mouse(&mut self, evt: MouseEvent, zones: &HitZones, player: &mut dyn Playback) -> Result<AppEffect> {
         let (x, y) = (evt.column, evt.row);
-        if self.input.is_some() { return Ok(()); }
+        if self.input.is_some() { return Ok(AppEffect::Continue); }
 
         // 1. Click on menu bar headers (Media, Playback, Audio, Video, Subtitle, Tools, View, Help)
         if !self.fullscreen && matches!(evt.kind, MouseEventKind::Down(MouseButton::Left)) {
@@ -756,7 +846,7 @@ impl App {
                         self.active_menu = Some(*menu);
                         self.menu_selected = 0;
                     }
-                    return Ok(());
+                    return Ok(AppEffect::Continue);
                 }
             }
         }
@@ -767,25 +857,23 @@ impl App {
                 if let Some(menu) = self.active_menu {
                     for (item_rect, idx) in items {
                         if hit(Some(*item_rect), x, y) {
-                            let _ = self.trigger_menu_action(menu, *idx, player);
-                            self.active_menu = None;
-                            return Ok(());
+                            return self.trigger_menu_action(menu, *idx, player);
                         }
                     }
                 }
                 // If clicked outside dropdown box, dismiss it
                 if !hit(Some(dropdown_box), x, y) {
                     self.active_menu = None;
-                    return Ok(());
+                    return Ok(AppEffect::Continue);
                 }
-                return Ok(());
+                return Ok(AppEffect::Continue);
             }
         }
 
         // Close menu if clicked anywhere else
         if self.active_menu.is_some() && matches!(evt.kind, MouseEventKind::Down(MouseButton::Left)) {
             self.active_menu = None;
-            return Ok(());
+            return Ok(AppEffect::Continue);
         }
 
         // 3. Overlay dialog clicks (Help, Info, Subtitle tracks, Audio tracks)
@@ -804,11 +892,11 @@ impl App {
                                 }
                             }
                         }
-                        return Ok(());
+                        return Ok(AppEffect::Continue);
                     } else {
                         // Clicked outside modal dialog: dismiss it
                         self.overlay = Overlay::None;
-                        return Ok(());
+                        return Ok(AppEffect::Continue);
                     }
                 }
             }
@@ -818,21 +906,20 @@ impl App {
                     MouseEventKind::ScrollUp => self.track_selected = self.track_selected.saturating_sub(1),
                     _ => {}
                 }
-                return Ok(());
+                return Ok(AppEffect::Continue);
             }
-            return Ok(());
+            return Ok(AppEffect::Continue);
         }
 
         match evt.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if self.fullscreen && hit(zones.back, x, y) { self.toggle_fullscreen(); }
-                else if hit(zones.fullscreen, x, y) { self.toggle_fullscreen(); }
+                if (self.fullscreen && hit(zones.back, x, y)) || hit(zones.fullscreen, x, y) { self.toggle_fullscreen(); }
                 else if hit(zones.play, x, y) { player.toggle_pause(); self.last_osd = Instant::now(); }
                 else if hit(zones.stop, x, y) { player.stop(); self.notify("Stopped"); }
                 else if hit(zones.prev, x, y) { self.adjacent(player, -1); }
                 else if hit(zones.next, x, y) { self.adjacent(player, 1); }
                 else if hit(zones.playlist_toggle, x, y) {
-                    self.view_mode = if self.view_mode == ViewMode::Player { ViewMode::Playlist } else { ViewMode::Player };
+                    self.toggle_playlist();
                 }
                 else if hit(zones.subtitles, x, y) { self.open_tracks(Overlay::SubtitleTracks, player); }
                 else if hit(zones.audio, x, y) { self.open_tracks(Overlay::AudioTracks, player); }
@@ -856,7 +943,7 @@ impl App {
                     }
                 } else if let Some((rect, start)) = zones.browser.filter(|(r, _)| hit(Some(*r), x, y)) {
                     let row = (y - rect.y) as usize;
-                    let index = (start + row).min(self.entries.len().saturating_sub(1));
+                    let index = (start + row).min(self.list_len().saturating_sub(1));
                     let double = self.last_file_click.is_some_and(|(at, prev)| prev == index && at.elapsed() < Duration::from_millis(450));
                     self.last_file_click = Some((Instant::now(), index));
                     self.selected = index;
@@ -868,9 +955,6 @@ impl App {
                     if is_double {
                         self.toggle_fullscreen();
                         self.last_video_click = None;
-                    } else {
-                        player.toggle_pause();
-                        self.last_osd = Instant::now();
                     }
                 }
             }
@@ -892,10 +976,10 @@ impl App {
                     player.set_volume(new_vol);
                 }
             }
-            MouseEventKind::ScrollDown if self.view_mode == ViewMode::Playlist && !self.fullscreen => {
-                self.selected = (self.selected + 3).min(self.entries.len().saturating_sub(1));
+            MouseEventKind::ScrollDown if self.view_mode != ViewMode::Player && !self.fullscreen => {
+                self.selected = (self.selected + 3).min(self.list_len().saturating_sub(1));
             }
-            MouseEventKind::ScrollUp if self.view_mode == ViewMode::Playlist && !self.fullscreen => {
+            MouseEventKind::ScrollUp if self.view_mode != ViewMode::Player && !self.fullscreen => {
                 self.selected = self.selected.saturating_sub(3);
             }
             MouseEventKind::ScrollUp => {
@@ -904,19 +988,156 @@ impl App {
                 self.notify(format!("Volume: {}%", self.volume));
             }
             MouseEventKind::ScrollDown => {
-                self.volume = self.volume.saturating_sub(1);
+                self.volume = self.volume.saturating_sub(1).max(0);
                 player.set_volume(self.volume);
                 self.notify(format!("Volume: {}%", self.volume));
             }
             _ => {}
         }
-        Ok(())
+        Ok(AppEffect::Continue)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::playback::test_support::FakePlayback;
+
+    #[test]
+    fn queue_navigation_is_independent_of_browser_and_advances_once_at_end() {
+        let mut app = App::new(None);
+        let mut player = FakePlayback::default();
+        let sources: Vec<String> = vec!["http://fixture/a.mp4".into(), "http://fixture/b.mp4".into()];
+        app.queue.select(&sources[0], sources.clone());
+        app.cwd = PathBuf::from("/unrelated-browser-folder");
+        app.entries.clear();
+        app.adjacent(&mut player, 1);
+        assert_eq!(player.opened, [sources[1].clone()]);
+        app.adjacent(&mut player, -1);
+        assert_eq!(app.current.as_deref(), Some(sources[0].as_str()));
+        player.state = 6;
+        app.tick(&mut player);
+        assert_eq!(app.current.as_deref(), Some(sources[1].as_str()));
+        app.tick(&mut player);
+        assert_eq!(player.opened.len(), 3);
+        player.state = 5;
+        app.tick(&mut player);
+        assert_eq!(player.opened.len(), 3, "Stop must not advance playback");
+        player.state = 6;
+        app.tick(&mut player);
+        assert_eq!(player.opened.len(), 3, "End must not wrap with repeat off");
+    }
+
+    #[test]
+    fn backend_failures_leave_selection_and_sync_values_unchanged() {
+        let mut app = App::new(None);
+        app.queue.select("http://fixture/a.mp4", vec![]);
+        app.current = Some("http://fixture/a.mp4".into());
+        let mut player = FakePlayback { reject_open: true, reject_tracks: true, reject_delays: true, ..Default::default() };
+        assert!(app.open_media("http://fixture/b.mp4", &mut player).is_err());
+        assert_eq!(app.current.as_deref(), Some("http://fixture/a.mp4"));
+        assert_eq!(app.queue.sources(), &["http://fixture/a.mp4"]);
+        app.adjust_audio_delay(100, &mut player);
+        app.adjust_subtitle_delay(100, &mut player);
+        assert_eq!((app.audio_delay_ms, app.subtitle_delay_ms), (0, 0));
+        app.tracks = vec![TrackOption { label: "Track 2".into(), action: TrackAction::SubtitleEmbedded(2) }];
+        app.choose_track(&mut player);
+        assert_eq!(app.selected_subtitle, "Off");
+        assert!(app.status.starts_with("Couldn't activate"));
+    }
+
+    #[test]
+    fn error_state_is_reported_once_without_auto_advancing() {
+        let mut app = App::new(None);
+        let mut player = FakePlayback { state: 7, ..Default::default() };
+        app.tick(&mut player);
+        assert!(app.status.contains("Playback failed"));
+        let notified_at = app.status_at;
+        app.tick(&mut player);
+        assert_eq!(app.status_at, notified_at);
+        assert!(player.opened.is_empty());
+    }
+
+    #[test]
+    fn rapid_shortcuts_reach_the_same_event_dispatcher_as_terminal_input() {
+        use ratatui::crossterm::event::Event;
+        let mut app = App::new(None);
+        let mut player = FakePlayback::default();
+        let mut effects = Vec::new();
+        for code in [KeyCode::Char('f'), KeyCode::Char('g'), KeyCode::Char('-')] {
+            effects.push(app.handle_event(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)), &HitZones::default(), &mut player).unwrap());
+        }
+        assert!(app.fullscreen);
+        assert_eq!(effects, [AppEffect::Continue, AppEffect::ToggleRenderer, AppEffect::Continue]);
+        assert_eq!(player.volume, 95);
+    }
+
+    #[test]
+    fn volume_decrement_controls_clamp_at_zero() {
+        let mut app = App::new(None);
+        let mut player = FakePlayback::default();
+        app.volume = 0;
+        app.handle_key(KeyEvent::new(KeyCode::Char('-'), KeyModifiers::NONE), &mut player).unwrap();
+        assert_eq!((app.volume, player.volume), (0, 0));
+        app.trigger_menu_action(MenuKind::Audio, 3, &mut player).unwrap();
+        assert_eq!((app.volume, player.volume), (0, 0));
+        app.view_mode = ViewMode::Player;
+        app.handle_mouse(MouseEvent { kind: MouseEventKind::ScrollDown, column: 0, row: 0, modifiers: KeyModifiers::NONE }, &HitZones::default(), &mut player).unwrap();
+        assert_eq!((app.volume, player.volume), (0, 0));
+    }
+
+    #[test]
+    fn subtitle_cycle_returns_to_off_after_local_sidecar() {
+        let mut app = App::new(None);
+        let mut player = FakePlayback::default();
+        app.load_subtitle(Path::new("samples/sample.srt"), &mut player).unwrap();
+        app.cycle_subtitle(&mut player);
+        assert!(!app.sidecar_enabled);
+        assert_eq!(app.selected_subtitle, "Off");
+        app.cycle_subtitle(&mut player);
+        assert!(app.sidecar_enabled);
+        assert_eq!(player.subtitle, -1);
+    }
+
+    #[test]
+    fn mouse_menu_propagates_quit_and_renderer_effects() {
+        let mut app = App::new(None);
+        let mut player = FakePlayback::default();
+        let rect = Rect::new(0, 1, 35, 1);
+        let click = MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 2, row: 1, modifiers: KeyModifiers::NONE };
+        for (menu, index, expected) in [(MenuKind::Media, 4, AppEffect::Quit), (MenuKind::Video, 1, AppEffect::ToggleRenderer)] {
+            app.active_menu = Some(menu);
+            let zones = HitZones { menu_dropdown: Some((rect, vec![(rect, index)])), ..Default::default() };
+            assert_eq!(app.handle_mouse(click, &zones, &mut player).unwrap(), expected);
+        }
+    }
+
+    #[test]
+    fn sync_and_frame_controls_reach_playback() {
+        let mut app = App::new(None);
+        app.view_mode = ViewMode::Player;
+        let mut player = FakePlayback::default();
+        app.handle_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE), &mut player).unwrap();
+        assert_eq!(player.audio_delay, 100);
+        app.handle_key(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE), &mut player).unwrap();
+        assert_eq!(player.subtitle_delay, 100);
+        app.handle_key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE), &mut player).unwrap();
+        assert_eq!(player.frame_steps, 1);
+        assert!(player.seeks.is_empty());
+    }
+
+    #[test]
+    fn video_double_click_preserves_playback_state() {
+        let mut app = App::new(None);
+        let mut player = FakePlayback::default();
+        let zones = HitZones { video: Some(Rect::new(0, 0, 80, 24)), ..Default::default() };
+        let click = MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 20, row: 10, modifiers: KeyModifiers::NONE };
+        app.handle_mouse(click, &zones, &mut player).unwrap();
+        app.handle_mouse(click, &zones, &mut player).unwrap();
+        assert!(app.fullscreen);
+        assert_eq!(player.state, 3);
+        assert_eq!(player.paused, 0);
+    }
     #[test]
     fn extension_filter() {
         assert!(supported(Path::new("movie.MKV")));

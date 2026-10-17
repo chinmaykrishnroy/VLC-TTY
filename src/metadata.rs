@@ -94,13 +94,8 @@ pub fn extract_metadata(path: &Path) -> AudioMetadata {
 fn scan_magic_image(buf: &[u8]) -> Option<Arc<VideoFrame>> {
     // Look for JPEG SOI (0xFF, 0xD8, 0xFF)
     for i in 0..buf.len().saturating_sub(64) {
-        if buf[i] == 0xFF && buf[i + 1] == 0xD8 && buf[i + 2] == 0xFF {
-            if let Ok(img) = image::load_from_memory(&buf[i..]) {
-                if img.width() >= 32 && img.height() >= 32 {
-                    return Some(image_to_video_frame(img));
-                }
-            }
-        } else if buf[i..].starts_with(b"\x89PNG\r\n\x1a\n") {
+        if (buf[i] == 0xFF && buf[i + 1] == 0xD8 && buf[i + 2] == 0xFF)
+            || buf[i..].starts_with(b"\x89PNG\r\n\x1a\n") {
             if let Ok(img) = image::load_from_memory(&buf[i..]) {
                 if img.width() >= 32 && img.height() >= 32 {
                     return Some(image_to_video_frame(img));
@@ -175,12 +170,10 @@ fn parse_id3v2(data: &[u8], meta: &mut AudioMetadata) {
             "TIT2" | "TT2" => if meta.title.is_none() { meta.title = decode_id3_text(payload); },
             "TPE1" | "TP1" => if meta.artist.is_none() { meta.artist = decode_id3_text(payload); },
             "TALB" | "TAL" => if meta.album.is_none() { meta.album = decode_id3_text(payload); },
-            "APIC" | "PIC" => {
-                if meta.thumbnail.is_none() {
+            "APIC" | "PIC" if meta.thumbnail.is_none() => {
                     if let Some(art) = parse_id3_apic(payload, version) {
                         meta.thumbnail = Some(art);
                     }
-                }
             }
             _ => {}
         }
@@ -223,10 +216,16 @@ fn decode_id3_text(payload: &[u8]) -> Option<String> {
     let enc = payload[0];
     let body = &payload[1..];
     match enc {
-        0 => String::from_utf8(body.iter().filter(|&&b| b != 0).copied().collect()).ok(),
+        0 => Some(body.iter().map(|&b| char::from(b)).collect::<String>().trim_matches('\0').to_owned()),
         1 | 2 => {
-            // UTF-16 with BOM or BE
-            let u16s: Vec<u16> = body.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+            let (little_endian, body) = if enc == 2 { (false, body) }
+                else if body.starts_with(&[0xFF, 0xFE]) { (true, &body[2..]) }
+                else if body.starts_with(&[0xFE, 0xFF]) { (false, &body[2..]) }
+                else { return None; };
+            if body.len() % 2 != 0 { return None; }
+            let u16s: Vec<u16> = body.chunks_exact(2).map(|c| if little_endian {
+                u16::from_le_bytes([c[0], c[1]])
+            } else { u16::from_be_bytes([c[0], c[1]]) }).collect();
             String::from_utf16(&u16s).ok().map(|s| s.trim_matches('\0').to_string())
         }
         3 => String::from_utf8(body.to_vec()).ok().map(|s| s.trim_matches('\0').to_string()),
@@ -371,6 +370,14 @@ fn parse_mp4_m4a(data: &[u8], meta: &mut AudioMetadata) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn id3_text_respects_encoding_and_bom() {
+        assert_eq!(decode_id3_text(&[2, 0, 65, 0, 66]), Some("AB".into()));
+        assert_eq!(decode_id3_text(&[1, 0xFE, 0xFF, 0, 65]), Some("A".into()));
+        assert_eq!(decode_id3_text(&[1, 0xFF, 0xFE, 65, 0]), Some("A".into()));
+        assert_eq!(decode_id3_text(&[0, 0xE9]), Some("é".into()));
+    }
 
     #[test]
     fn test_audio_extensions() {

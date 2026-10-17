@@ -1,7 +1,7 @@
 //! Local subtitle support independent of terminal graphics and VLC video callbacks.
 //! LibVLC selects embedded tracks; text sidecars are rendered as a Ratatui overlay.
 //! This is deliberately limited to UTF-8 SRT/WebVTT (not ASS layout/styling).
-use std::{fs, path::{Path, PathBuf}};
+use std::{borrow::Cow, fs, path::{Path, PathBuf}};
 use anyhow::{bail, Context, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,19 +84,27 @@ impl SubtitleFile {
         });
         paths.iter().find_map(|p| Self::load(p).ok())
     }
-    pub fn current(&self, time_ms: i64, delay_ms: i64) -> Option<&str> {
+    pub fn current(&self, time_ms: i64, delay_ms: i64) -> Option<Cow<'_, str>> {
         // Positive delay means the subtitle appears later.
-        let time = time_ms - delay_ms;
+        let time = time_ms.saturating_sub(delay_ms);
         let i = self.cues.partition_point(|cue| cue.start_ms <= time);
-        if i == 0 { return None; }
-        let cue = &self.cues[i - 1];
-        (time < cue.end_ms).then_some(cue.text.as_str())
+        let mut active = self.cues[..i].iter().filter(|cue| time < cue.end_ms);
+        let first = active.next()?;
+        let mut text = Cow::Borrowed(first.text.as_str());
+        for cue in active { text.to_mut().push('\n'); text.to_mut().push_str(&cue.text); }
+        Some(text)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn overlapping_cue_remains_after_shorter_cue_ends() {
+        let f = SubtitleFile { path: "overlap.srt".into(), cues: parse_text("1\n00:00:01,000 --> 00:00:10,000\nLong\n\n2\n00:00:02,000 --> 00:00:03,000\nShort") };
+        assert_eq!(f.current(2500, 0).as_deref(), Some("Long\nShort"));
+        assert_eq!(f.current(4000, 0).as_deref(), Some("Long"));
+    }
     #[test]
     fn timestamps() {
         assert_eq!(timestamp("01:02:03,500"), Some(3_723_500));
@@ -117,15 +125,15 @@ mod tests {
     fn bundled_sidecar_is_discovered() {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/sample.mp4");
         let track = SubtitleFile::discover(&path).expect("bundled SRT should be discoverable");
-        assert!(track.current(1_500, 0).unwrap_or("").contains("TermVLC"));
-        assert!(track.current(4_500, 0).unwrap_or("").contains("terminal"));
+        assert!(track.current(1_500, 0).as_deref().unwrap_or("").contains("TermVLC"));
+        assert!(track.current(4_500, 0).as_deref().unwrap_or("").contains("terminal"));
     }
     #[test]
     fn cue_lookup_and_delay() {
         let f = SubtitleFile { path: PathBuf::from("test.srt"), cues: parse_text("1\n00:00:01,000 --> 00:00:02,000\nHello") };
-        assert_eq!(f.current(1500, 0), Some("Hello"));
-        assert_eq!(f.current(2000, 0), None);
-        assert_eq!(f.current(1500, 1000), None);
-        assert_eq!(f.current(2500, 1000), Some("Hello"));
+        assert_eq!(f.current(1500, 0).as_deref(), Some("Hello"));
+        assert_eq!(f.current(2000, 0).as_deref(), None);
+        assert_eq!(f.current(1500, 1000).as_deref(), None);
+        assert_eq!(f.current(2500, 1000).as_deref(), Some("Hello"));
     }
 }

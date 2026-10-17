@@ -1,7 +1,10 @@
 mod app;
 mod dialogs;
 mod graphics;
+mod input;
 mod metadata;
+mod playback;
+mod queue;
 mod renderer;
 mod subtitles;
 mod vlc;
@@ -14,7 +17,6 @@ use ratatui::{
         cursor,
         event::{self,Event,KeyCode,KeyEventKind,KeyModifiers,EnableBracketedPaste,DisableBracketedPaste},
         execute,
-        style,
         terminal::{disable_raw_mode,enable_raw_mode,EnterAlternateScreen,LeaveAlternateScreen,
             BeginSynchronizedUpdate,EndSynchronizedUpdate},
     },
@@ -28,7 +30,7 @@ struct Options {
     fps:u32,native_window:bool,doctor:bool,
 }
 fn usage(){
-    println!("VLC media player  v0.5.0  ·  Rust + Ratatui + LibVLC 3.x\n\n\
+    println!("TermVLC  v0.5.0  ·  Rust + Ratatui + LibVLC 3.x\n\n\
 Usage: termvlc [OPTIONS] [VIDEO|DIRECTORY|URL]\n\n\
 Options:\n\
   --graphics auto|kitty|sixel|iterm2|ansi     Auto detect (default)\n\
@@ -38,7 +40,7 @@ Options:\n\
   --doctor                                 Print LibVLC diagnostic information\n\
   -h, --help                               Show help\n\n\
 Controls: F/F11 fullscreen; Esc or Back button return; Space pause; ←/→ seek;\n\
-S choose subtitles; L load external captions; A audio tracks; +/- volume;\n\
+Shift+S subtitles; l load captions; Shift+A audio tracks; +/- volume;\n\
 [ and ] speed; O / Ctrl+O open file; N/P next/previous; G graphics fallback;\n\
 ? help, I media information, Q quit.\n\n\
 Drag and drop any video, folder or subtitle file into the terminal.\n\
@@ -86,7 +88,6 @@ impl TerminalGuard {
 }
 impl Drop for TerminalGuard {
     fn drop(&mut self){
-        let _=execute!(io::stdout(),style::Print("\x1b[10;2t"));
         let _=disable_raw_mode();
         let _=execute!(io::stdout(),event::DisableMouseCapture,DisableBracketedPaste,
             cursor::Show,LeaveAlternateScreen);
@@ -107,51 +108,13 @@ fn main() -> Result<()> {
     }
 }
 
-#[cfg(windows)]
-fn toggle_window_fullscreen() {
-    extern "system" {
-        fn keybd_event(b_vk: u8, b_scan: u8, dw_flags: u32, dw_extra_info: usize);
-    }
-    const VK_F11: u8 = 0x7A;
-    const KEYEVENTF_KEYUP: u32 = 0x0002;
-    unsafe {
-        keybd_event(VK_F11, 0, 0, 0);
-        keybd_event(VK_F11, 0, KEYEVENTF_KEYUP, 0);
-    }
-}
-#[cfg(not(windows))]
-fn toggle_window_fullscreen() {}
-
-fn drain_key_burst(first: char) -> Result<String> {
-    let mut s = String::new();
-    s.push(first);
-    // ConPTY / Windows Terminal injects dropped Explorer files as rapid KeyPress bursts.
-    // Keep accumulating while keys arrive within 40ms.
-    while event::poll(Duration::from_millis(40))? {
-        match event::read()? {
-            Event::Key(k) => {
-                if k.kind == KeyEventKind::Press {
-                    match k.code {
-                        KeyCode::Char(c) => s.push(c),
-                        KeyCode::Enter => break,
-                        _ => {}
-                    }
-                }
-                // Do NOT break on KeyEventKind::Release so the dropped string isn't truncated!
-            }
-            _ => {}
-        }
-    }
-    Ok(s)
-}
-
 fn run() -> Result<()> {
     let opts=options()?;
     if opts.doctor {
-        println!("VLC media player  diagnostics\nOS: {}\nVLC_HOME: {}",
+        println!("TermVLC  diagnostics\nOS: {}\nVLC_HOME: {}",
             std::env::consts::OS, std::env::var("VLC_HOME").unwrap_or_else(|_| "(unset)".into()));
         match VlcPlayer::new() {
-            Ok(p)=>println!("LibVLC loaded: {}\nRun the sample to check actual decoding.",p.library_path().display()),
+            Ok(p)=>println!("LibVLC {} loaded: {}\nRun the sample to check actual decoding.",p.library_version(),p.library_path().display()),
             Err(e)=>{println!("LibVLC unavailable: {e:#}"); std::process::exit(1);}
         }
         return Ok(());
@@ -181,48 +144,40 @@ fn run() -> Result<()> {
     let interval=Duration::from_millis((1000/opts.fps.max(1)) as u64);
     loop {
         if event::poll(Duration::from_millis(4))? {
-            match event::read()? {
-                Event::Key(key) if key.kind==KeyEventKind::Press => {
-                    if key.code==KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL){break;}
-                    if let KeyCode::Char(c) = key.code {
-                        if app.input.is_none() && !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) {
-                            if event::poll(Duration::from_millis(35))? {
-                                let burst = drain_key_burst(c)?;
-                                if burst.chars().count() > 1 {
-                                    let first_ch = burst.chars().next().unwrap();
-                                    let is_repeat = burst.chars().all(|ch| ch == first_ch);
-                                    if !is_repeat {
-                                        let _ = app.handle_drop_or_paste(&burst, &mut player);
-                                        continue;
-                                    } else {
-                                        for _ in 0..burst.len() {
-                                            if !app.handle_key(key, &mut player)? { return Ok(()); }
-                                        }
-                                        continue;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if key.code==KeyCode::Char('g') && app.input.is_none() && app.overlay==app::Overlay::None {
-                        graphics.toggle_ansi();
-                        app.notify(format!("Video renderer: {}",graphics.label()));
-                        terminal.clear()?;
-                        graphics.invalidate();
-                    } else if !app.handle_key(key,&mut player)? {break;}
+            let first = event::read()?;
+            let batch_text = matches!(&first, Event::Key(k) if k.kind == KeyEventKind::Press
+                && matches!(k.code, KeyCode::Char(_))
+                && !k.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT))
+                && app.input.is_none() && app.overlay == app::Overlay::None && app.active_menu.is_none();
+            let mut events = if batch_text {
+                input::read_batch(first, |wait| {
+                    if event::poll(wait)? { Ok(Some(event::read()?)) } else { Ok(None) }
+                })?
+            } else { vec![first] };
+            if let Some(drop) = input::dropped_path(&events).filter(|_| batch_text) {
+                if let Err(error) = app.handle_drop_or_paste(&drop.path, &mut player) {
+                    app.notify(format!("Open error: {error:#}"));
                 }
-                Event::Paste(s)=>{ let _ = app.handle_drop_or_paste(&s, &mut player); }
-                Event::Mouse(m)=>app.handle_mouse(m,&zones,&mut player)?,
-                Event::Resize(_,_)=>{terminal.clear()?;graphics.invalidate();}
-                _=>{}
+                events = events.split_off(drop.consumed);
+            }
+            {
+                for event in events {
+                    if matches!(event, Event::Resize(_, _)) { terminal.clear()?; graphics.invalidate(); }
+                    match app.handle_event(event, &zones, &mut player)? {
+                        app::AppEffect::Quit => return Ok(()),
+                        app::AppEffect::ToggleRenderer => {
+                            graphics.toggle_ansi();
+                            app.notify(format!("Video renderer: {}", graphics.label()));
+                            terminal.clear()?;
+                            graphics.invalidate();
+                        }
+                        app::AppEffect::Continue => {}
+                    }
+                }
             }
         }
+        app.tick(&mut player);
         if previous_fullscreen != app.fullscreen || previous_media != app.current {
-            if previous_fullscreen != app.fullscreen {
-                let seq = if app.fullscreen { "\x1b[10;1t" } else { "\x1b[10;2t" };
-                let _ = execute!(io::stdout(), style::Print(seq));
-                toggle_window_fullscreen();
-            }
             terminal.clear()?;
             graphics.invalidate();
             previous_fullscreen = app.fullscreen;
@@ -238,5 +193,4 @@ fn run() -> Result<()> {
             last_draw=Instant::now();
         }
     }
-    Ok(())
 }

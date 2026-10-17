@@ -2,14 +2,29 @@
 
 A **Rust + Ratatui** terminal application using **LibVLC 3.x** for demuxing, decoding, playback, audio and audio/video synchronization. The design and interface are original (not a fork of VLC or SparkPlayer).
 
-**This release is a source candidate.** The packaging environment did not contain `cargo`, `rustc`, or LibVLC, and could not download them. Static checks and sample media validation were possible; compilation and real playback have **NOT** been verified. See [VALIDATION.md](VALIDATION.md). Don't assume it's production ready until `cargo test` and a local playback smoke test succeed.
+**Product direction:** terminal-first. Video playback and controls belong inside the terminal, with familiar VLC workflows adapted to keyboard and mouse use. Ratatui and terminal image protocols are the primary frontend. The existing separate native-video-window mode is an optional fallback.
+
+The next milestone focuses on terminal rendering latency and frame pacing, captions/menu ordering over video, responsive input and resizing, and real audio/video synchronization. Queue editing, shuffle, saved settings and resume positions follow that playback-quality work.
+
+**Development build.** The reliability foundation has been compiled and tested on Windows with LibVLC 3.0.24, including actual local/HTTP frame decoding and playback controls. Audible synchronization, terminal graphics quality, clean-machine installation, and Linux/macOS runtime behavior still need acceptance testing. See [VALIDATION.md](VALIDATION.md).
+
+## Reliability foundation — 17 October 2026
+
+- Playback controls have a testable interface separate from the terminal event loop.
+- A playback queue stays independent of the file browser. Opening a local file seeds it from that file's folder; URLs seed a single-item queue. Next/Previous respect queue boundaries, end-of-media advances automatically, and **Playback → Repeat** cycles Off / All / One.
+- **Tab / Ctrl+L** opens the actual queue; **View → Browse Files** opens the directory browser. Opening a directory also opens the browser.
+- Fixed negative volume, stuck subtitle cycling, overlapping text captions, Unicode metadata, mouse-menu Quit, renderer menu handling, and rapid-key input loss.
+- Audio/embedded-subtitle synchronization reaches LibVLC with the correct time units. Frame stepping uses LibVLC's frame-step operation. Failed controls report failure rather than claiming success.
+- Double-click video changes fullscreen without pausing playback. Single-click the Play button or press Space to pause.
+- `--doctor` reports the actual LibVLC version. Incompatible major versions are rejected before using the LibVLC 3 interface.
+- Unit tests run without VLC. Explicit runtime tests require it and fail if it is unavailable; Windows CI installs VLC and runs those tests separately.
 
 ## Changes over v0.4.0
 
 - **VLC-inspired cone logo**: multi-line orange/light ANSI-art on the launch/empty player, compact cone in sidebar, and ▲ in header. TermVLC is **not affiliated with VideoLAN**.
-- **True, reversible fullscreen**: `F` / `F11` removes the library, title, progress, and toolbar. The image fills the terminal while maintaining its aspect ratio. A small `‹ BACK [Esc / F]` control is clickable. `Esc`, `Backspace` or `F` restores the normal layout, including the browser. Terminal is cleared on transitions and image caches are invalidated. Image graphics are temporarily hidden behind dialogs to avoid terminals painting images over menu text.
-- **Embedded subtitle/audio track menus**: `S` / `A`, arrow keys and Enter select tracks via LibVLC.
-- **Reliable text subtitle overlay** for UTF-8 `.srt` / `.vtt` files: automatic sidecar discovery (`Movie.srt`, `Movie.en.srt`, etc.), `L` to load a file at runtime, `--subtitle` at startup, ±100 ms sync via `,`/`.`. The separate text path is necessary because custom LibVLC video callbacks do not reliably produce composited subtitles on every system. ASS/SSA go via LibVLC and may not be visible in embedded terminal rendering.
+- **In-terminal fullscreen**: `f` / `F11` removes the menus, timeline and toolbar; `Esc`, `Backspace`, `f` or double-click returns. The top-left click target also returns. Use the terminal host's own controls for operating-system window fullscreen; TermVLC does not inject global F11 keystrokes.
+- **Embedded subtitle/audio track menus**: `Shift+S` / `Shift+A`, arrow keys and Enter select tracks via LibVLC; `v` / `b` cycle tracks.
+- **Text subtitle overlay** for UTF-8 `.srt` / `.vtt` files: automatic sidecar discovery (`Movie.srt`, `Movie.en.srt`, etc.), `l` to load a file, `--subtitle` at startup, and ±100 ms sync via `,`/`.`. ASS/SSA and embedded tracks use LibVLC; their actual appearance in each terminal protocol still needs verification.
 - **Mouse interactions**: click fullscreen/back/play/subtitles/audio, click or drag progress to seek, double click media to open, wheel scrolls lists.
 - **VLC-style UI**: media file browser, timeline, pause/play, volume/mute, speed, status/OSD, help (`?`) and info (`I`) windows, `O` to open file/folder/URL, `X` stop.
 - **All v0.4 graphics retained**: Kitty/Sixel/iTerm2 auto-detection, high-quality pixel rendering, bounded image-encoding worker, ANSI half-block fallback, `G` toggle, native VLC window alternative.
@@ -29,6 +44,7 @@ $env:VLC_HOME = 'C:\Program Files\VideoLAN\VLC'
 $env:PATH = "$env:VLC_HOME;$env:PATH"
 cargo build --release
 cargo test
+cargo test -- --ignored --test-threads=1 --nocapture
 .\target\release\termvlc.exe --doctor
 .\target\release\termvlc.exe --graphics auto ".\samples\sample.mp4"
 ```
@@ -86,14 +102,18 @@ Built-in Terminal.app may fall back to ANSI half-block video. You can also use `
 | `+ / -`, `M` | Volume ±5%, mute |
 | `X` | Stop |
 | `[` / `]` | Playback rate in 0.25× increments |
-| `S` / click CC | Choose VLC subtitle track, disable it, or use external sidecar |
+| `Shift+S` / click CC, `v` | Choose subtitle track / cycle subtitles |
 | `L` | Load SRT, WebVTT, ASS/SSA subtitle file from a path |
 | `,` / `.` | Delay local text subtitles earlier/later by 100 ms |
-| `A` / click Audio | Choose audio track |
-| `O` | Type a local file/folder/HTTP(S) URL to open |
+| `Shift+A` / click Audio, `b` | Choose audio track / cycle audio tracks |
+| `o` / `Ctrl+O` | Open file picker (path entry on Linux/macOS) |
+| `Ctrl+N` / `Ctrl+U` | Type a network URL or local path |
+| `Ctrl+D` | Enter a folder path to browse |
 | `↑ / ↓`, `Enter`, `Backspace` | Browse and open; parent folder in standard layout |
 | Double-click file | Open media from sidebar |
-| `N / P` | Next / previous media in current directory |
+| `n / p` | Next / previous item in the playback queue |
+| `Tab` / `Ctrl+L` | Show or hide playback queue |
+| Playback → Repeat | Cycle repeat Off / All / One |
 | `G` | Toggle high-quality terminal graphics / ANSI fallback |
 | `?` / `F1`, `I` | Help / media information |
 | `R`, `Q` | Refresh directory / quit |
@@ -104,11 +124,11 @@ The archive contains `samples/sample.mp4` (8-second H.264/AAC video) and a match
 
 - Native LibVLC C symbols are resolved at runtime (`libloading`). **No VLC SDK or headers needed to compile**, but VLC runtime libraries and plugins are needed to run.
 - `src/graphics.rs` probes available terminal graphics; does not promise pixel output when the terminal cannot support Kitty/Sixel/iTerm2 or forward queries. Auto falls back to ANSI. `--graphics kitty` is an opt-in override, not guaranteed to work everywhere.
-- Terminal inline-video smoothness will vary: larger images must be encoded/transferred every frame and terminals may be bandwidth limited. `TERMVLC_DECODE_MAX=0` requests the original full video frame dimensions, default decode cap 1080p; this **does not guarantee 1080p video display**. `--native-window` uses a separate conventional VLC video window.
-- SRT/WebVTT captions are intentionally displayed outside pixel graphics to prevent protocol graphics from covering text. In **native-window** mode, external subtitle files are delegated to LibVLC's compositor instead; UTF-8 parsing is only used for inline terminal mode.
+- Terminal inline-video smoothness will vary: images must be encoded/transferred every frame. The current default uses uncapped source dimensions (`TERMVLC_DECODE_MAX=0`); set `TERMVLC_DECODE_MAX=1080` to reduce callback-buffer dimensions and CPU work. This does not guarantee 1080p terminal display. `--native-window` uses a separate conventional VLC video window.
+- SRT/WebVTT captions are text overlays on the video area. Image/text ordering still needs verification per terminal protocol. In **native-window** mode, external subtitle files use LibVLC's compositor after playback starts; UTF-8 parsing is used for inline mode.
 - Embedded VLC subtitles can be **selected**, but rendering inside custom-memory video output may depend on VLC internals and output modules. For reliable terminal captions, use an external UTF-8 `.srt` or `.vtt`.
-- No optical disc menus, DVD navigation, equalizer, snapshot saving, playlists on disk, resume history, or hardware accelerated **inline** video yet.
-- The test suite has never run against real Windows Terminal/Kitty/iTerm2 + LibVLC in this workspace. Run `cargo test` and a real `samples/sample.mp4` playback test locally before relying on it.
+- No optical disc menus, DVD navigation, equalizer, snapshot saving, queue editing/import/export, shuffle, resume history, or hardware accelerated **inline** video yet.
+- The decoder/control tests use dummy audio output and do not verify audible sound or terminal visuals. Run the manual checks in [VALIDATION.md](VALIDATION.md) before relying on a particular terminal or audio device.
 
 ## Source and licenses
 

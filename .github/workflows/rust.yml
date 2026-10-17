@@ -23,11 +23,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Compile and test core (does not require VLC installed)
-        run: cargo test --all-targets
+        run: cargo test --locked --all-targets
+      - name: Strict Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
       - name: Release build
         run: cargo build --release
+      - name: Install VLC runtime (Windows)
+        if: runner.os == 'Windows'
+        run: choco install vlc --yes --no-progress
+      - name: Verify actual LibVLC decoding and controls (Windows)
+        if: runner.os == 'Windows'
+        run: cargo test --locked -- --ignored --test-threads=1 --nocapture
       - name: Smoke test command parser
         run: cargo run --release -- --help
 
-# NOTE: CI validates compilation/tests only. A separate human-run matrix
-# must confirm real LibVLC decoding, audio and image protocols per terminal.
+# Windows also checks actual decoding and playback controls using dummy audio.
+# Audible sync, graphics protocols and device behavior require manual validation.
