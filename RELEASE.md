@@ -24,6 +24,8 @@ Windows player and launcher builds statically link their Microsoft C runtime; im
 
 **Current publication blocker:** exact Windows/macOS runtime-to-contrib-source correspondence has not been established. The preserved recipe source superset alone is insufficient evidence; `release_manifest.py` refuses publication while that identity is unverified. Linux records exact distro source package versions. CI development artifacts remain available for testing. Resolve upstream build provenance or build the runtime from preserved sources before tagging the public release.
 
+This gate applies to prereleases as well as stable releases. There is no `--preview` exception in the publication validator. Source archive contents, original upstream archive hashes, component source hashes, runtime origin, application version and CI commit identity are checked independently. Collected source bytes do not automatically establish source correspondence. [Draft release notes](RELEASE-NOTES.md) are preparation, not a published release.
+
 Publish single executable assets, SHA256 checksums, build manifests and source/notice companions after all gates pass. Source companions accompany the component records; they are not installers. The build manifest must describe remaining runtime/system dependencies and source-evidence limitations honestly.
 
 CI uploads executable assets separately from the larger Linux runtime-source archives, so downloading a player artifact does not also download its source companion. The tag workflow gathers both artifact types before checking publication requirements.

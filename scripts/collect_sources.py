@@ -107,7 +107,10 @@ def upstream(output):
                    for path in sorted((source / "contrib/tarballs").rglob("*")) if path.is_file()]
         if not records:
             raise RuntimeError("No contributed dependency sources collected")
+        original_file = "UPSTREAM-vlc-3.0.24.tar.xz"
+        shutil.copy2(asset, source / original_file)
         manifest = {"origin": VLC_URL, "sha256": VLC_SHA, "contrib_sources": records,
+                    "original_file": original_file,
                     "recipe_adjustments": {"contrib/src/tremor/rules.mak": {"original_pin": "b56ffce0", "expanded_pin": tremor_pin}},
                     "scope": "VLC release source plus checksum/git-pinned contrib recipe source superset; not a claim of bit-reproducible upstream binaries"}
         (source / "SOURCE_MANIFEST.json").write_text(json.dumps(manifest, indent=2) + "\n")

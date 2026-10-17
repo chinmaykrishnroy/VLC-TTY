@@ -17,7 +17,7 @@ TARGETS = (
     "x86_64-apple-darwin", "aarch64-apple-darwin",
     "x86_64-pc-windows-msvc", "aarch64-pc-windows-msvc",
 )
-DOCS = ("README.md", "LICENSE", "BUILDING.md", "RELEASING.md", "RELEASE.md", "CONTRIBUTING.md", "OBJECTIVE.md", "CHANGELOG.md",
+DOCS = ("README.md", "LICENSE", "BUILDING.md", "RELEASING.md", "RELEASE.md", "RELEASE-NOTES.md", "CONTRIBUTING.md", "OBJECTIVE.md", "CHANGELOG.md",
         "ROADMAP.md", "ARCHITECTURE.md", "VALIDATION.md", "docs/SSH.md", "docs/PI5-VALIDATION.md",
         "docs/release-platform-research.md", "docs/standalone-research.md", "docs/portable-review.md", "docs/portable-0.0.1-spec.md", "assets/vlc-tty.svg")
 

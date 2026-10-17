@@ -42,4 +42,5 @@ jobs:
         run: |
           gh release create "$RELEASE_TAG" dist/* \
             --verify-tag --title "VLC-TTY $RELEASE_TAG" --generate-notes \
-            --notes 'Single-file portable executables with embedded LibVLC for six native targets. Choose the correct OS/CPU architecture. Runtime licenses and source companions are included alongside the executables; no installer or separate VLC installation is required. See RELEASE.md for base-OS requirements and remaining visual/device acceptance.'
+            --prerelease --latest=false \
+            --notes-file RELEASE-NOTES.md

@@ -78,12 +78,18 @@ class PackagingTests(unittest.TestCase):
                 path = directory / (f"vlc-tty-{version}-{LABELS[target]}" + (".exe" if "windows" in target else ""))
                 path.write_bytes(target.encode())
                 path.with_name(path.name + ".sha256").write_text(f"{digest(path)}  {path.name}\n")
-                (directory / (path.name + ".json")).write_text(json.dumps({"target": target, "runtime_included": True,
-                    "source_dirty": False, "runtime": {"archive_verified": True, "source_correspondence": {"verified": True}, "source_companion": {"file": "vlc-3.0.24-source-snapshot.tar.gz"}}}))
+                import os
+                upstream = json.loads((ROOT / "scripts/runtime-manifest.json").read_text()).get(target, {})
+                (directory / (path.name + ".json")).write_text(json.dumps({"target": target, "version": version, "commit": os.environ.get("GITHUB_SHA", "test-commit"), "runtime_included": True,
+                    "source_dirty": False, "runtime": {"archive_verified": True, "origin": upstream.get("url"), "upstream_sha256": upstream.get("sha256"), "source_correspondence": {"verified": True}, "source_companion": {"file": "vlc-3.0.24-source-snapshot.tar.gz"}}}))
             (directory / "vlc-3.0.24-source-snapshot.tar.gz").write_bytes(b"test source companion")
             source = directory / "vlc-3.0.24-source-snapshot.tar.gz"
             source.with_name(source.name + ".sha256").write_text(f"{digest(source)}  {source.name}\n")
-            manifest(directory)
+            from test_source_release import SourceReleaseTests
+            source_sha = SourceReleaseTests().fixture(source)
+            source.with_name(source.name + ".sha256").write_text(f"{digest(source)}  {source.name}\n")
+            with patch("release_manifest.VLC_SHA", source_sha):
+                manifest(directory)
             self.assertEqual(len((directory / "SHA256SUMS").read_text().splitlines()), 13)
             metadata = directory / (path.name + ".json")
             identity = json.loads(metadata.read_text())
@@ -96,6 +102,15 @@ class PackagingTests(unittest.TestCase):
             path.write_bytes(b"corrupted archive")
             with self.assertRaisesRegex(ValueError, "Checksum mismatch"):
                 manifest(directory)
+
+    def test_publication_workflow_has_no_preview_exception(self):
+        import subprocess
+        workflow = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        self.assertIn("python3 scripts/release_manifest.py dist\n", workflow)
+        self.assertNotIn("--preview", workflow)
+        result = subprocess.run([__import__('sys').executable, str(ROOT / "scripts/release_manifest.py"), "dist", "--preview"], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("unrecognized arguments: --preview", result.stderr)
 
 
 if __name__ == "__main__":
