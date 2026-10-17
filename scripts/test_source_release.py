@@ -7,9 +7,21 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from release_manifest import verify_upstream_sources, VLC_URL
+from collect_sources import fetch_contrib
+import subprocess
 
 
 class SourceReleaseTests(unittest.TestCase):
+    def test_source_fetch_retries_without_changing_git_pins_or_global_config(self):
+        with patch.dict("os.environ", {"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "existing", "GIT_CONFIG_VALUE_0": "keep"}), patch("collect_sources.time.sleep"), patch("collect_sources.subprocess.run", side_effect=[subprocess.CalledProcessError(2, "make"), None]) as run:
+            fetch_contrib(Path("fetch"))
+            self.assertEqual(run.call_count, 2)
+            env = run.call_args.kwargs["env"]
+            self.assertEqual(env["GIT_CONFIG_KEY_0"], "existing")
+            self.assertEqual(env["GIT_CONFIG_COUNT"], "2")
+            self.assertEqual(env["GIT_CONFIG_KEY_1"], "url.https://gitlab.xiph.org/.insteadOf")
+            self.assertEqual(env["GIT_CONFIG_VALUE_1"], "http://gitlab.xiph.org/")
+            self.assertEqual(run.call_args.args[0][:3], ["make", "-j4", "fetch-all"])
     def fixture(self, path, corrupt=False, empty=False):
         original = b"original release source archive"
         dependency = b"preserved contributed source"

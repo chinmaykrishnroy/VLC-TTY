@@ -100,7 +100,9 @@ pub fn read(r: &mut impl Read) -> io::Result<Message> {
                 pts: u64_at(9) as i64,
                 lead_us: u64_at(17) as i64,
                 data: bytes[25..]
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|s| i16::from_le_bytes([s[0], s[1]]))
                     .collect(),
             })

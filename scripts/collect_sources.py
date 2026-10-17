@@ -76,6 +76,28 @@ def linux(packages, output):
     return {"file": output.name, "sha256": sha(output), "kind": "exact Ubuntu source package versions"}
 
 
+def fetch_contrib(directory):
+    command = ["make", "-j4", "fetch-all", "CC=cc", "CXX=c++", "MINGW_W64_VERSION=14",
+               "CONTRIB_VIDEOLAN=https://download.videolan.org/pub/contrib",
+               "VIDEOLAN=https://download.videolan.org/pub/videolan", "GNU=https://ftpmirror.gnu.org/gnu"]
+    env = dict(os.environ)
+    # Keep release recipes intact and their exact commit pins unchanged. Use
+    # HTTPS for the old Xiph Git URL; CI proxies can reject its HTTP endpoint.
+    index = int(env.get("GIT_CONFIG_COUNT", "0"))
+    env.update({"GIT_CONFIG_COUNT": str(index+1),
+                f"GIT_CONFIG_KEY_{index}": "url.https://gitlab.xiph.org/.insteadOf",
+                f"GIT_CONFIG_VALUE_{index}": "http://gitlab.xiph.org/"})
+    for attempt in range(3):
+        try:
+            subprocess.run(command, cwd=directory, env=env, check=True)
+            return
+        except subprocess.CalledProcessError:
+            if attempt == 2:
+                raise
+            # make retains completed downloads and rechecks their pinned hashes.
+            time.sleep(2)
+
+
 def upstream(output):
     with tempfile.TemporaryDirectory(prefix="vlc-tty-upstream-sources-") as temporary:
         root = Path(temporary)
@@ -100,9 +122,7 @@ def upstream(output):
         subprocess.run(["../bootstrap", "--build=x86_64-linux-gnu", "--host=x86_64-w64-mingw32"], cwd=fetch, check=True)
         # Fetch source only. Native compilers answer configuration probes; no
         # target library is compiled. fetch-all deliberately preserves a superset.
-        subprocess.run(["make", "-j4", "fetch-all", "CC=cc", "CXX=c++", "MINGW_W64_VERSION=14",
-                        "CONTRIB_VIDEOLAN=https://download.videolan.org/pub/contrib",
-                        "VIDEOLAN=https://download.videolan.org/pub/videolan", "GNU=https://ftpmirror.gnu.org/gnu"], cwd=fetch, check=True)
+        fetch_contrib(fetch)
         records = [{"file": str(path.relative_to(source)), "sha256": sha(path)}
                    for path in sorted((source / "contrib/tarballs").rglob("*")) if path.is_file()]
         if not records:
@@ -111,6 +131,7 @@ def upstream(output):
         shutil.copy2(asset, source / original_file)
         manifest = {"origin": VLC_URL, "sha256": VLC_SHA, "contrib_sources": records,
                     "original_file": original_file,
+                    "retrieval_overrides": {"http://gitlab.xiph.org/": "https://gitlab.xiph.org/"},
                     "recipe_adjustments": {"contrib/src/tremor/rules.mak": {"original_pin": "b56ffce0", "expanded_pin": tremor_pin}},
                     "scope": "VLC release source plus checksum/git-pinned contrib recipe source superset; not a claim of bit-reproducible upstream binaries"}
         (source / "SOURCE_MANIFEST.json").write_text(json.dumps(manifest, indent=2) + "\n")

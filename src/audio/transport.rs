@@ -28,7 +28,10 @@ pub fn token(text: &str) -> Result<[u8; 32]> {
         bail!("Audio session key must contain 64 hexadecimal characters");
     }
     let mut bytes = [0; 32];
-    for (byte, chunk) in bytes.iter_mut().zip(text.as_bytes().chunks_exact(2)) {
+    for (byte, chunk) in bytes
+        .iter_mut()
+        .zip(text.as_bytes().as_chunks::<2>().0.iter())
+    {
         *byte = u8::from_str_radix(std::str::from_utf8(chunk)?, 16)
             .context("Invalid audio session key")?;
     }
