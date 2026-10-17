@@ -5,13 +5,22 @@ import unittest
 from unittest.mock import patch
 import zipfile
 import tarfile
-from package_release import create_archive, digest, package, ROOT, TARGETS
+from package_release import create_archive, digest, package, ROOT, TARGETS, DOCS
 from release_manifest import manifest
 from build_portable import LABELS
 from verify_package import verify_documentation
 
 
 class PackagingTests(unittest.TestCase):
+    def test_real_documentation_inventory_is_self_contained(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as temporary:
+            stage = Path(temporary)
+            for relative in DOCS:
+                path = stage / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(ROOT / relative, path)
+            verify_documentation(stage, DOCS)
     def test_packaged_documentation_links_resolve_inside_archive(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
