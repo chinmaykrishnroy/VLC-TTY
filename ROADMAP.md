@@ -21,7 +21,7 @@ The release gate is a usable terminal player, including silent SSH playback. Che
 - [x] UTF-8 M3U import/export, shuffle, repeat and startup volume/speed flags.
 - [x] Contribution/release guides, comprehensive help and architecture checks.
 - [ ] Complete source correspondence for the Windows/macOS runtime before publication.
-- [ ] Complete current native, launcher-lifetime and physical-device regression gates.
+- [x] Pass six native standalone lanes, source collection, launcher-lifetime checks and physical Pi bundled-runtime/PTY tests.
 
 ## Next usability milestones
 

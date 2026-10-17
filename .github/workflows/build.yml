@@ -72,7 +72,17 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: vlc-tty-${{ matrix.target }}
-          path: dist/*
+          path: |
+            dist/*
+            !dist/*-runtime-sources.tar.gz
+            !dist/*-runtime-sources.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@v7
+        if: runner.os == 'Linux'
+        with:
+          name: vlc-tty-${{ matrix.target }}-runtime-sources
+          path: dist/*-runtime-sources.tar.gz*
           if-no-files-found: error
           retention-days: 14
 

@@ -7,6 +7,8 @@ Fixed review range: `a4d37cf...d074de6`. Two independent read-only reviews used 
 - Combined `--ssh --help` extracted the runtime and showed the thin-build runtime requirement. Reproduced on the standalone Windows executable. The launcher now recognizes help/version among options while respecting option values and the `--` delimiter; unit and executable regressions cover this.
 - The supervisor did not own its child's lifetime or handle termination. Unix now forwards termination and waits, both binaries return through cleanup guards, and Windows uses a kill-on-close Job Object. Unix executable verification includes an actual PID-targeted SIGTERM test requiring child exit, terminal restoration and extraction cleanup. Uncatchable process kills can still leave temporary files.
 
+Native execution confirmed Unix SIGTERM cleanup on the physical Pi. A separate Windows regression stalls playback on a loopback HTTP endpoint, forcibly terminates the launcher PID and waits on the extracted child's process handle. The Job Object test passed on Windows x64 and is required on both Windows CI runners.
+
 ## Specification findings
 
 - Both Windows executables imported `VCRUNTIME140.dll`, preventing startup on a clean PC without that redistributable. PE inspection reproduced this independently of the architecture mismatch. Both Windows targets now enable static CRT linkage, with an import-table gate on the outer and extracted executable.

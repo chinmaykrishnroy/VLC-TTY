@@ -1,6 +1,14 @@
 # Raspberry Pi 5 validation — 17 October 2026
 
-## Device and build
+## Portable 0.0.1 follow-up
+
+The same device built commit `e9a3264` into one executable embedding LibVLC 3.0.23 and its distro library/plugin closure. The file was 79,565,928 bytes, SHA256 `8437aca587ff82518d3fc3c8e99605a2b9bec284d879c8175d3b15eb565cbecb`. This locally built file uses the device's base-OS library baseline; release CI builds Linux files on Ubuntu 24.04 instead.
+
+Two concurrent invocations loaded LibVLC from separate private extraction directories while external runtime paths were invalid. Actual silent decoding advanced the clock and produced frames. Help, identity, extraction, component hashes, documentation and normal-exit cleanup passed. Sending SIGTERM to the public launcher stopped its child, restored the terminal and removed the runtime directory.
+
+A 30-second ANSI PTY run with the same synthetic 720p/30 FPS source passed pause/redraw, help/queue, caption, reopen, resize and exit checks. It captured 3,333,140 bytes and 112,731 half-block characters. Summed peak RSS for launcher plus player was 235.39 MiB; average CPU was 68.2% of one core. The updated driver samples the process tree: the first standalone measurement sampled only the launcher and was discarded for performance comparisons. Summed RSS can count shared pages twice; this is not unique physical memory usage or a movie-length benchmark.
+
+## Earlier thin build: device and environment
 
 - Raspberry Pi 5 Model B Rev 1.0, 8 GiB RAM.
 - Ubuntu Server 26.04 LTS, ARM64, kernel `7.0.0-1020-raspi`.

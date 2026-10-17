@@ -31,6 +31,16 @@ def smoke(binary, media, duration=12, expect_caption=None):
     peak_rss_kib = 0
     cpu_ticks = 0
 
+    def process_tree(pid):
+        result = [pid]
+        try:
+            children = Path(f"/proc/{pid}/task/{pid}/children").read_text().split()
+            for child in children:
+                result.extend(process_tree(int(child)))
+        except FileNotFoundError:
+            pass
+        return result
+
     def collect(seconds):
         nonlocal peak_rss_kib, cpu_ticks
         until = time.monotonic() + seconds
@@ -45,13 +55,17 @@ def smoke(binary, media, duration=12, expect_caption=None):
                 captured.extend(data)
                 if len(captured) > 64 * 1024 * 1024:
                     raise RuntimeError("PTY capture exceeded 64 MiB")
-            try:
-                status = Path(f"/proc/{process.pid}/status").read_text()
-                peak_rss_kib = max(peak_rss_kib, int(next(line.split()[1] for line in status.splitlines() if line.startswith("VmRSS:"))))
-                fields = Path(f"/proc/{process.pid}/stat").read_text().rsplit(")", 1)[1].split()
-                cpu_ticks = int(fields[11]) + int(fields[12])
-            except (FileNotFoundError, StopIteration):
-                pass
+            rss, ticks = 0, 0
+            for pid in process_tree(process.pid):
+                try:
+                    status = Path(f"/proc/{pid}/status").read_text()
+                    rss += int(next(line.split()[1] for line in status.splitlines() if line.startswith("VmRSS:")))
+                    fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+                    ticks += int(fields[11]) + int(fields[12])
+                except (FileNotFoundError, StopIteration):
+                    pass
+            peak_rss_kib = max(peak_rss_kib, rss)
+            cpu_ticks = max(cpu_ticks, ticks)
 
     def send(keys, delay=0.35):
         os.write(master, keys)
@@ -93,6 +107,7 @@ def smoke(binary, media, duration=12, expect_caption=None):
             "alternate_screen_restored": b"\x1b[?1049l" in captured,
             "peak_rss_mib": round(peak_rss_kib / 1024, 2) if peak_rss_kib else None,
             "average_cpu_one_core_percent": round(cpu_ticks / os.sysconf("SC_CLK_TCK") / elapsed * 100, 2) if cpu_ticks else None,
+            "resource_scope": "launcher and descendants; summed RSS may count shared pages twice" if peak_rss_kib else None,
         }
         if expect_caption:
             result["caption_present"] = expect_caption.encode() in captured

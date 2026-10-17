@@ -26,4 +26,6 @@ Windows player and launcher builds statically link their Microsoft C runtime; im
 
 Publish single executable assets, SHA256 checksums, build manifests and source/notice companions after all gates pass. Source companions accompany the component records; they are not installers. The build manifest must describe remaining runtime/system dependencies and source-evidence limitations honestly.
 
+CI uploads executable assets separately from the larger Linux runtime-source archives, so downloading a player artifact does not also download its source companion. The tag workflow gathers both artifact types before checking publication requirements.
+
 Use a version tag matching Cargo.toml only after the complete gates pass. Creating or updating this pipeline does not itself create a tag or publish a release. See [validation](VALIDATION.md), [standalone research](docs/standalone-research.md) and [contributing](CONTRIBUTING.md).

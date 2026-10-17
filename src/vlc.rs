@@ -886,7 +886,22 @@ mod tests {
         player
             .open(sample.to_str().expect("fixture path must be UTF-8"))
             .unwrap();
+        // Match the CLI startup order: open asynchronously, then apply --rate.
+        player.set_rate(1.25);
         wait_for_decoded_progress(&player);
+        let native_rate = unsafe {
+            let getter = player
+                .api
+                ._library
+                .get::<unsafe extern "C" fn(*mut c_void) -> f32>(b"libvlc_media_player_get_rate\0")
+                .unwrap();
+            getter(player.player)
+        };
+        assert!(
+            (native_rate - 1.25).abs() < 0.01,
+            "Startup rate must reach the native player"
+        );
+        player.set_rate(1.0);
         assert!(player.set_audio_delay(100));
         assert!(player.set_subtitle_delay(-100));
         unsafe {

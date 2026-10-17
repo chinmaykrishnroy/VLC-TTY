@@ -81,6 +81,9 @@ def verify(executable, target):
         if os.name != "nt":
             from termination_smoke import smoke
             smoke(alone, ROOT / "samples/sample.mp4")
+        else:
+            from windows_lifetime_smoke import smoke
+            smoke(alone)
         print("Portable smoke passed: architecture, help, concurrent launches, bundled runtime, decoding, cleanup, extraction and docs")
 
 
