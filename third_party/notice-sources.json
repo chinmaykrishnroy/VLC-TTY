@@ -1,0 +1,61 @@
+{
+  "base64-simd-0.8.0": [
+    {
+      "file": "LICENSE",
+      "source": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE",
+      "sha256": "71674605ec4c087fe9eb534e3e4f9e26eb2e4aabcd76a29fd156c6a844d44b3d"
+    }
+  ],
+  "vsimd-0.8.0": [
+    {
+      "file": "LICENSE",
+      "source": "https://raw.githubusercontent.com/Nugine/simd/d74c030d9dc4f3cae02146d1f497ff62726ef09a/LICENSE",
+      "sha256": "71674605ec4c087fe9eb534e3e4f9e26eb2e4aabcd76a29fd156c6a844d44b3d"
+    }
+  ],
+  "icy_sixel-0.5.1": [
+    {
+      "file": "LICENSE-MIT",
+      "source": "https://raw.githubusercontent.com/mkrueger/icy_sixel/7baecc1bbb18ddf0ff0de83d296b4509a1b64b0f/LICENSE-MIT",
+      "sha256": "7110f70a51841ce71ec9a2a156db30561aba84d3ad2323ef88ede17c9aa34ba0"
+    },
+    {
+      "file": "LICENSE-APACHE",
+      "source": "https://raw.githubusercontent.com/mkrueger/icy_sixel/7baecc1bbb18ddf0ff0de83d296b4509a1b64b0f/LICENSE-APACHE",
+      "sha256": "66aaf920a0396276850341369ef155613b76ee53115eaeca2df61efedeb27043"
+    }
+  ],
+  "quantette-0.6.0": [
+    {
+      "file": "LICENSE-MIT",
+      "source": "https://raw.githubusercontent.com/IanManske/quantette/066855ad3efb4143c3b901c812f80b9b17f8f303/LICENSE-MIT",
+      "sha256": "8f2b430687de9562bfac3b9c2e58d5989d2f0b95772928e94c23a942878c919a"
+    },
+    {
+      "file": "LICENSE-APACHE",
+      "source": "https://raw.githubusercontent.com/IanManske/quantette/066855ad3efb4143c3b901c812f80b9b17f8f303/LICENSE-APACHE",
+      "sha256": "aac73b3148f6d1d7111dbca32099f68d26c644c6813ae1e4f05f6579aa2663fe"
+    }
+  ],
+  "ratatui-termina-0.1.0": [
+    {
+      "file": "LICENSE",
+      "source": "https://raw.githubusercontent.com/ratatui/ratatui/e665c36cb14752a61cd777fbd06dbef8474f2add/LICENSE",
+      "sha256": "50eb43e8d742c9c61a9391e42b2184fce54dbd1893a1bb1c85b8c9ee217ab1f5"
+    }
+  ],
+  "vtparse-0.6.2": [
+    {
+      "file": "LICENSE.md",
+      "source": "https://raw.githubusercontent.com/wez/wezterm/edeae72b5fc55c7fa4aa1d08bbefd08c5493f757/LICENSE.md",
+      "sha256": "37db33bbbd7348969eda397b89a16f252d56c1ca7481b6ccaf56ccdcbab5dcca"
+    }
+  ],
+  "wezterm-input-types-0.1.0": [
+    {
+      "file": "LICENSE.md",
+      "source": "https://raw.githubusercontent.com/wez/wezterm/d5ca5509b95edc31291ba29bd1fcbf3f0b12c92d/LICENSE.md",
+      "sha256": "37db33bbbd7348969eda397b89a16f252d56c1ca7481b6ccaf56ccdcbab5dcca"
+    }
+  ]
+}

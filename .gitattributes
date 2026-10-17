@@ -1,0 +1,5 @@
+* text=auto eol=lf
+*.png binary
+*.mp4 binary
+# Keep exact downloaded bytes so notice hashes survive Windows checkouts.
+third_party/notices/** -text

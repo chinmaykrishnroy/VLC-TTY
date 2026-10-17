@@ -1,0 +1,5 @@
+# GitHub added this hosted label after actionlint 1.7.12's runner inventory.
+# https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04-arm

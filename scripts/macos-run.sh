@@ -10,5 +10,5 @@ fi
 export VLC_HOME="${VLC_HOME:-/Applications/VLC.app}"
 cargo build --release
 cargo test
-"./target/release/termvlc" --doctor
-"./target/release/termvlc" --graphics auto "${1:-./samples/sample.mp4}"
+"./target/release/vlc-tty" --doctor
+"./target/release/vlc-tty" --graphics auto "${1:-./samples/sample.mp4}"

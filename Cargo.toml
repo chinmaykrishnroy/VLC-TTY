@@ -1,14 +1,15 @@
 [package]
-name = "termvlc"
-version = "0.5.0"
+name = "vlc-tty"
+version = "0.6.0"
 edition = "2021"
-description = "VLC-inspired terminal player with fullscreen, subtitles, tracks and pixel graphics on Windows, Linux and macOS"
+description = "Terminal-first video player with LibVLC, Ratatui and headless SSH playback"
+repository = "https://github.com/chinmaykrishnroy/VLC-TTY"
 license = "MIT"
 
 [dependencies]
 anyhow = "1"
 libloading = "0.8"
 ratatui = { version = "0.30.0", features = ["crossterm"] }
-ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm", "image-defaults"] }
+ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"] }
 image = { version = "0.25.6", default-features = false, features = ["png", "jpeg"] }
 icy_sixel = "0.5.1"

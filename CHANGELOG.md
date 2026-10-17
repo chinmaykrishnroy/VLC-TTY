@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.0 (development)
+
+- Rename application and executable to VLC-TTY; add original terminal-cone SVG and focused product documentation.
+- Add silent SSH defaults, bounded decode height/FPS, runtime diagnostics and a terminal-free decoding smoke command.
+- Replace queued graphics work with latest-frame mailboxes; reject stale results across media/layout changes and reuse one owned Kitty image ID.
+- Correct tmux Sixel escaping, reserve text-caption space and reject overflowing subtitle timestamps.
+- Add six-target native CI, required LibVLC decode checks, application archives with notices/checksums and a gated tag-release workflow.
+- Remove unused still-image codecs from the terminal graphics dependency tree and apply consistent Rust formatting.
+
 ## 0.5.0 (source candidate)
 - VLC-inspired ANSI traffic cone and refreshed controls.
 - Fullscreen video with clickable back target, clearing/restoring terminal layout.

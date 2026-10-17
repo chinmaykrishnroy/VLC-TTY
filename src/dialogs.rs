@@ -37,13 +37,14 @@ pub fn open_file_dialog() -> Option<PathBuf> {
     }
 
     type GetOpenFileNameWFn = unsafe extern "system" fn(*mut OpenFileNameW) -> i32;
-    let get_open_file_name: libloading::Symbol<GetOpenFileNameWFn> = unsafe { lib.get(b"GetOpenFileNameW\0").ok()? };
+    let get_open_file_name: libloading::Symbol<GetOpenFileNameWFn> =
+        unsafe { lib.get(b"GetOpenFileNameW\0").ok()? };
 
     let mut file_buf = vec![0u16; 2048];
     // Filter string: pairs of null-terminated strings ending with double null
     let filter: Vec<u16> = "Media Files (*.mp4, *.mkv, *.avi, *.mp3...)\0*.mp4;*.mkv;*.avi;*.mov;*.webm;*.flac;*.mp3;*.wav;*.m4v;*.wmv;*.ts;*.vob;*.ogg;*.aac;*.opus;*.srt;*.vtt;*.ass\0All Files (*.*)\0*.*\0\0"
         .encode_utf16().collect();
-    let title: Vec<u16> = "Select Media - TermVLC\0".encode_utf16().collect();
+    let title: Vec<u16> = "Select Media - VLC-TTY\0".encode_utf16().collect();
 
     let mut ofn: OpenFileNameW = unsafe { std::mem::zeroed() };
     ofn.l_struct_size = std::mem::size_of::<OpenFileNameW>() as u32;
@@ -55,7 +56,10 @@ pub fn open_file_dialog() -> Option<PathBuf> {
 
     let res = unsafe { get_open_file_name(&mut ofn) };
     if res != 0 {
-        let len = file_buf.iter().position(|&c| c == 0).unwrap_or(file_buf.len());
+        let len = file_buf
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(file_buf.len());
         let os_str = OsString::from_wide(&file_buf[..len]);
         Some(PathBuf::from(os_str))
     } else {

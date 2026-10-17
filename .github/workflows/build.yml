@@ -1,0 +1,98 @@
+name: Native builds and playback checks
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  native:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    env:
+      CARGO_BUILD_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Unit regressions
+        run: cargo test --locked --all-targets
+      - name: Strict Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Packaging regressions
+        run: python -m unittest discover -s scripts -p test_*.py -v
+      - name: Install matching LibVLC runtime
+        run: python scripts/ci_install_vlc.py ${{ matrix.target }}
+      - name: Require real file and HTTP decoding, controls and silent mode
+        run: cargo test --locked --all-targets -- --ignored --test-threads=1 --nocapture
+      - name: Release executable
+        run: cargo build --locked --release
+      - name: Package application and dependency notices
+        run: python scripts/package_release.py ${{ matrix.target }}
+      - name: Verify extracted executable without a display
+        shell: bash
+        env:
+          RELEASE_TARGET: ${{ matrix.target }}
+        run: |
+          for archive in dist/*.zip dist/*.tar.gz; do
+            if [ -f "$archive" ]; then
+              python scripts/verify_package.py "$archive" "$RELEASE_TARGET"
+            fi
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vlc-tty-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  ubuntu-server:
+    name: Ubuntu 26.04 ARM64 headless decoding
+    runs-on: ubuntu-26.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Runtime without a desktop
+        run: python3 scripts/ci_install_vlc.py aarch64-unknown-linux-gnu
+      - name: Decode without display or sound device
+        run: |
+          unset DISPLAY WAYLAND_DISPLAY
+          cargo test --locked --all-targets -- --ignored --test-threads=1 --nocapture
+          cargo run --locked -- --ssh --smoke-test samples/sample.mp4

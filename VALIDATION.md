@@ -1,46 +1,47 @@
-# Development validation — 17 October 2026
+# Validation — 17 October 2026
 
-This is a development build of the reliability foundation, not a declaration of VLC feature parity or production readiness.
+## Verified locally on Windows x64
 
-## Verified on this Windows workspace
+- LibVLC 3.0.24 loads from the installed VideoLAN runtime.
+- 59 Rust tests cover controls, queue state, input, captions, renderer layout, frame mailboxes and native decoding. The complete suite explicitly enables three runtime tests.
+- File and loopback HTTP tests require decoded frames and an advancing playback clock. Pause, seek, frame stepping, stop and delay round-trips are exercised against LibVLC.
+- Silent playback decodes frames with audio disabled and a 90p callback cap, without requiring an audio device. The SSH profile chooses silent audio, 15 FPS and 720p by default.
+- Regression tests reject old encoded results across invalidation, verify tmux ESC doubling, require inline Kitty transfer with a reused image ID, bound encoding pixel budgets and reject overflowing subtitle timestamps.
+- Fullscreen OSD rows and optional caption rows are outside the pixel rectangle. Terminal-specific visual behavior remains a manual gate.
+- The release executable and its extracted Windows archive pass version/help/doctor and an actual silent headless decode check. Diagnostics report no TTY on stdin/stdout during this check.
+- Four Python packaging tests cover Unix executable permissions, pre-1980 ZIP timestamps, architecture-specific runtime manifests, matching release tags, complete archive sets and corruption detection.
+- Workflow syntax passes actionlint 1.7.12. Its runner inventory predates Ubuntu 26.04 ARM64; the documented hosted label is explicitly listed in the configuration.
 
-- Installed runtime: **LibVLC 3.0.24**, loaded dynamically from the normal VLC installation.
-- **45 tests passed**, including the explicitly enabled runtime tests.
-- Strict Clippy passed: `cargo clippy --offline --locked --all-targets -- -D warnings`.
-- Release build passed: `cargo build --offline --locked --release`; the rebuilt executable's `--help` and `--doctor` commands both succeeded.
-- Local-file and loopback-HTTP playback tests require actual frames and advancing playback time. An Opening/Playing state alone is insufficient.
-- The local runtime test checks pause, frame stepping while paused, seeking, stop, and audio/subtitle delay round-trips in microseconds.
-- Deterministic regressions cover volume, subtitle cycling/overlap, metadata encoding, keyboard event preservation, mouse menu effects, fullscreen double-click behavior, queue navigation/advancement/repeat, and failed backend operations.
-- The original seven new regression cases were run before their fixes: **25 passed, 7 failed**. Their specific failures were corrected before running the full suite.
+Earlier regression runs reproduced volume/subtitle/input/queue defects before repair. The new stale-frame, tmux and timestamp cases also failed before their fixes. A passed fake-backend test is not counted as native playback evidence.
 
-The old HTTP test passed in isolation during this work. Its earlier failure was not traced to a proven production defect. Its fixture now supports HEAD and byte ranges, cleans itself up even on failure, and its playback assertion requires decoded progress instead of a state number.
+## Automated remote gates
+
+The CI workflow requires six native targets: Linux, macOS and Windows on x64 and ARM64. Each target must pass unit tests, strict Clippy, a release build, real LibVLC decoding tests, package creation and a decode check from the extracted archive. An additional Ubuntu 26.04 ARM64 job installs only the headless runtime packages and runs without display variables.
+
+At the time this milestone was prepared, these new workflows were pending their first run. Update this record with run results rather than treating a workflow definition as proof. The initial baseline workflow passed its unit suites but failed Clippy on newer Rust lints; those reported source patterns have been corrected.
 
 ## Reproduce
 
-```powershell
+```sh
+cargo fmt --all -- --check
 cargo test --locked --all-targets
-cargo test --locked --all-targets -- --include-ignored --test-threads=1 --nocapture
+cargo test --locked --all-targets -- --ignored --test-threads=1 --nocapture
 cargo clippy --locked --all-targets -- -D warnings
 cargo build --locked --release
-.\target\release\termvlc.exe --doctor
-.\target\release\termvlc.exe --graphics auto .\samples\sample.mp4
+python -m unittest discover -s scripts -p 'test_*.py' -v
+vlc-tty --ssh --doctor
+vlc-tty --ssh --smoke-test samples/sample.mp4
 ```
 
-The default unit suite explicitly reports two ignored runtime tests, so it works on machines without VLC. The second command enables them, requires LibVLC, and fails if it cannot load. The Windows CI workflow installs VLC and runs these checks separately. The updated remote workflow has not been executed from this workspace.
+Unit tests report runtime tests as ignored by default, so machines without VLC can still run the deterministic suite. The explicit ignored-test command must load LibVLC and produce frames; it does not silently skip a missing runtime. Tests use dummy/disabled audio and establish no audible synchronization result.
 
-Runtime tests select **dummy audio output** so decoding/control verification does not depend on an audio device or produce sound. They do not establish audible synchronization or output quality.
+## Required manual acceptance
 
-## Manual acceptance still required
+- Actual Pi 5 / Ubuntu Server 26.04 over SSH, using the intended terminal. Record codec/resolution, renderer, terminal size, FPS/cap, CPU/memory/temperature, connection and session duration.
+- Kitty, Sixel and iTerm2: inspect caption/OSD visibility, menus, resize, fullscreen transitions, repeated media opens, renderer toggling, image cleanup and tmux passthrough. ANSI fallback needs a real terminal check too.
+- Sustained playback and input responsiveness on low-bandwidth connections, large files and live streams.
+- Unicode paths, invalid media/URLs, track switching and embedded subtitles across platforms.
+- Optional local audio/lipsync and native-window behavior. Audio forwarding to the SSH client is not implemented.
+- Clean-machine installation, platform security prompts, signing/notarization if future distribution claims require them.
 
-1. Test real audio output and lipsync on the intended device. Exercise audio track changes and `j`/`k` synchronization.
-2. Test each supported terminal graphics protocol and ANSI fallback. Check subtitles over video, OSD/menu image ordering, resize, and fullscreen transitions.
-3. Open two media files in the same folder, inspect the queue with Tab, browse another folder through View → Browse Files, and confirm Next still follows the original queue. Check repeat Off / All / One and end-of-media advancement.
-4. Try pause/resume, frame step, seeking, speed, stop/replay, malformed media, invalid URLs, and files with Unicode paths and metadata.
-5. Check native-window output and subtitle loading after playback begins. This remains a separate video window rather than an integrated desktop frontend.
-6. Validate long sessions, large video frames, live streams, clean-machine packaging, and Linux/macOS runtime behavior.
-
-For terminal fullscreen, `f`/F11 changes the application layout. TermVLC no longer injects global F11 keypresses; use the terminal host's own controls for OS-window fullscreen.
-
-## Next milestone
-
-The user confirmed the product is a terminal video player. Keep Ratatui, terminal image protocols and LibVLC as the primary architecture. Prioritize measured rendering latency/frame pacing, image/text ordering for subtitles and menus, responsive input/resizing, and real audio/video synchronization in supported terminals. Then add queue editing/import/export, shuffle, saved settings and resume positions. The existing separate native-window mode remains an optional fallback.
+Application archives require installed matching LibVLC libraries and plugins. No Pi/device performance, audible output, terminal visual acceptance, signed installers or VLC feature parity is claimed by these local checks.
