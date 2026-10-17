@@ -9,7 +9,7 @@ import subprocess
 import time
 
 
-def smoke(binary, media, duration=12, expect_caption=None, audio_endpoint=None, audio_token_file=None, metrics=None):
+def smoke(binary, media, duration=12, expect_caption=None, audio_endpoint=None, audio_token_file=None, metrics=None, repeat="off"):
     import fcntl
     import pty
     import termios
@@ -26,10 +26,13 @@ def smoke(binary, media, duration=12, expect_caption=None, audio_endpoint=None, 
     audio = (["--audio-output", "remote", "--audio-endpoint", audio_endpoint,
               "--audio-token-file", str(audio_token_file)] if audio_endpoint and audio_token_file else ["--silent"])
     profile = ["--metrics", str(metrics)] if metrics else []
-    process = subprocess.Popen([str(binary.resolve()), "--ssh", *audio, *profile, "--graphics", "ansi", str(media.resolve())],
+    process = subprocess.Popen([str(binary.resolve()), "--ssh", *audio, *profile, "--graphics", "ansi", "--repeat", repeat, str(media.resolve())],
                                stdin=slave, stdout=slave, stderr=slave, env=env, preexec_fn=child_setup)
     os.close(slave)
     captured = bytearray()
+    total_bytes = half_blocks = 0
+    carry = b""
+    restored = caption_seen = False
     started = time.monotonic()
     peak_rss_kib = 0
     cpu_ticks = 0
@@ -45,7 +48,7 @@ def smoke(binary, media, duration=12, expect_caption=None, audio_endpoint=None, 
         return result
 
     def collect(seconds):
-        nonlocal peak_rss_kib, cpu_ticks
+        nonlocal peak_rss_kib, cpu_ticks, total_bytes, half_blocks, carry, restored, caption_seen
         until = time.monotonic() + seconds
         while time.monotonic() < until:
             if select.select([master], [], [], min(0.05, max(0, until - time.monotonic())))[0]:
@@ -55,9 +58,15 @@ def smoke(binary, media, duration=12, expect_caption=None, audio_endpoint=None, 
                     break
                 if not data:
                     break
+                total_bytes += len(data)
+                combined = carry + data
+                half_blocks += combined.count("▀".encode()) - carry.count("▀".encode())
+                restored |= b"\x1b[?1049l" in combined
+                if expect_caption:
+                    caption_seen |= expect_caption.encode() in combined
+                carry = combined[-max(256, len(expect_caption.encode()) if expect_caption else 0):]
                 captured.extend(data)
-                if len(captured) > 64 * 1024 * 1024:
-                    raise RuntimeError("PTY capture exceeded 64 MiB")
+                del captured[:-4 * 1024 * 1024]
             rss, ticks = 0, 0
             for pid in process_tree(process.pid):
                 try:
@@ -104,10 +113,10 @@ def smoke(binary, media, duration=12, expect_caption=None, audio_endpoint=None, 
         collect(2)
         code = process.wait(timeout=5)
         result = {
-            "exit_code": code, "seconds": round(elapsed, 2), "terminal_bytes": len(captured),
-            "ansi_half_blocks": captured.count("▀".encode()), "paused_redraw": paused_was_visible,
+            "exit_code": code, "seconds": round(elapsed, 2), "terminal_bytes": total_bytes,
+            "ansi_half_blocks": half_blocks, "paused_redraw": paused_was_visible,
             "help_overlay": help_was_visible, "queue_view": queue_was_visible,
-            "alternate_screen_restored": b"\x1b[?1049l" in captured,
+            "alternate_screen_restored": restored,
             "peak_rss_mib": round(peak_rss_kib / 1024, 2) if peak_rss_kib else None,
             "average_cpu_one_core_percent": round(cpu_ticks / os.sysconf("SC_CLK_TCK") / elapsed * 100, 2) if cpu_ticks else None,
             "resource_scope": "launcher and descendants; summed RSS may count shared pages twice" if peak_rss_kib else None,
@@ -116,7 +125,7 @@ def smoke(binary, media, duration=12, expect_caption=None, audio_endpoint=None, 
             lines = metrics.read_text().splitlines()
             result["last_application_sample"] = json.loads(lines[-1]) if lines else None
         if expect_caption:
-            result["caption_present"] = expect_caption.encode() in captured
+            result["caption_present"] = caption_seen
         print(json.dumps(result, indent=2))
         checks = [code == 0, result["ansi_half_blocks"] > 0, paused_was_visible,
                   help_was_visible, queue_was_visible, result["alternate_screen_restored"]]
@@ -143,10 +152,11 @@ if __name__ == "__main__":
     parser.add_argument("media", type=Path)
     parser.add_argument("--duration", type=float, default=12)
     parser.add_argument("--expect-caption")
+    parser.add_argument("--repeat", choices=["off", "all", "one"], default="off")
     parser.add_argument("--metrics", type=Path)
     parser.add_argument("--audio-endpoint")
     parser.add_argument("--audio-token-file", type=Path)
     args = parser.parse_args()
     if bool(args.audio_endpoint) != bool(args.audio_token_file):
         parser.error("audio endpoint and token file are required together")
-    smoke(args.binary, args.media, args.duration, args.expect_caption, args.audio_endpoint, args.audio_token_file, args.metrics)
+    smoke(args.binary, args.media, args.duration, args.expect_caption, args.audio_endpoint, args.audio_token_file, args.metrics, args.repeat)

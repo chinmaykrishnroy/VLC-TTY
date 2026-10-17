@@ -105,7 +105,7 @@ def run(args):
                 remote_port = 49152+int.from_bytes(os.urandom(2), "little") % 16383
                 profile = str(Path(args.remote_driver).parent.parent.as_posix()) + f"/audio-smoke-{os.urandom(6).hex()}.jsonl"
                 command = shlex.join(["python3", args.remote_driver, args.remote_binary, args.remote_media,
-                                      "--duration", str(args.duration), "--audio-endpoint", f"127.0.0.1:{remote_port}",
+                                      "--duration", str(args.duration), "--repeat", "all", "--audio-endpoint", f"127.0.0.1:{remote_port}",
                                       "--audio-token-file", remote_key, "--metrics", profile])
                 result = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-R",
                                          f"127.0.0.1:{remote_port}:127.0.0.1:{port}", "--", args.ssh_host, command],

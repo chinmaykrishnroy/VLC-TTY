@@ -25,7 +25,9 @@ Run `vlc-tty --help`. For SSH, allocate a terminal: `ssh -t user@server 'vlc-tty
 - File browser, M3U playlists, export, shuffle and repeat.
 - SRT/VTT captions, track menus and timing controls.
 - ANSI video fallback plus Kitty, Sixel and iTerm2 graphics options.
-- Diagnostics, real decoding smoke checks and supervised runtime cleanup.
+- Diagnostics, opt-in server profiling, real decoding smoke checks and supervised runtime cleanup.
+- Experimental `connect HOST MEDIA` audio forwarding through authenticated loopback SSH channels and a local CPAL receiver. Requires a matching server build; measured lip-sync and 60-minute A/V acceptance remain open.
+- Fullscreen uses the complete terminal grid when text overlays are hidden. Host profile padding and aspect-ratio bars remain separate settings/behavior.
 
 ### Validation and limits
 
