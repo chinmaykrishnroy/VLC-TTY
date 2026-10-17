@@ -114,8 +114,15 @@ jobs:
         run: python3 scripts/pty_smoke.py target/debug/vlc-tty samples/sample.mp4 --expect-caption TermVLC
       - name: Forced pixel protocols must retain keyboard input after probe timeout
         run: |
-          python3 scripts/benchmark_playback.py target/debug/vlc-tty samples/sample.mp4 --renderer kitty --duration 12 --output target/benchmark-kitty
-          python3 scripts/benchmark_playback.py target/debug/vlc-tty samples/sample.mp4 --renderer sixel --duration 12 --output target/benchmark-sixel
+          python3 scripts/benchmark_playback.py target/debug/vlc-tty samples/sample.mp4 --renderer kitty --duration 12 --output "$RUNNER_TEMP/vlc-tty-benchmark-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-kitty"
+          python3 scripts/benchmark_playback.py target/debug/vlc-tty samples/sample.mp4 --renderer sixel --duration 12 --output "$RUNNER_TEMP/vlc-tty-benchmark-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-sixel"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: headless-terminal-benchmarks
+          path: ${{ runner.temp }}/vlc-tty-benchmark-*/
+          if-no-files-found: ignore
+          retention-days: 14
 
   runtime-sources:
     name: Preserve VLC and contributed dependency sources
