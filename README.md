@@ -22,6 +22,7 @@
 - External SRT/VTT captions, track selection and subtitle timing controls.
 - Kitty, Sixel and iTerm2 pixel graphics, plus ANSI half-block fallback.
 - Silent SSH profile with bounded decode size and frame rate.
+- Original compressed-file streaming over SSH with local decoding, speakers and seeking.
 - Runtime diagnostics and a headless decoding check.
 
 ## Get started
@@ -45,6 +46,16 @@ vlc-tty --help
 To build from source, install Rust stable and run `cargo build --locked --release`. The executable is `target/release/vlc-tty` (`vlc-tty.exe` on Windows). See [BUILDING.md](BUILDING.md).
 
 ## Watch over SSH
+
+For music or a video file stored on a server, stream the original file to your local player:
+
+```sh
+vlc-tty stream user@pi '/home/user/Music/song.mp3'
+```
+
+Decoding, terminal rendering and audio run locally. The server needs SSH and Python 3, with no VLC-TTY installation or public HTTP port. Byte ranges support seeking without transcoding or a mandatory full download. This mode currently opens one regular file; remote directory browsing, playlist expansion and embedded artwork/metadata in the TUI remain follow-up work.
+
+To run decoding and the terminal UI on the headless server instead, use the server player:
 
 On the server, copy the matching Linux portable executable and make it executable with `chmod +x`. Then launch from your local terminal:
 

@@ -12,6 +12,7 @@ mod playlist;
 mod profiling;
 mod queue;
 mod remote;
+mod remote_file;
 mod renderer;
 mod subtitles;
 mod terminal_probe;

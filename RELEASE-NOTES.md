@@ -27,6 +27,8 @@ Run `vlc-tty --help`. For SSH, allocate a terminal: `ssh -t user@server 'vlc-tty
 - ANSI video fallback plus Kitty, Sixel and iTerm2 graphics options.
 - Diagnostics, opt-in server profiling, real decoding smoke checks and supervised runtime cleanup.
 - Experimental `connect HOST MEDIA` audio forwarding through authenticated loopback SSH channels and a local CPAL receiver. Requires a matching server build; measured lip-sync and 60-minute A/V acceptance remain open.
+- `stream HOST FILE` transfers original compressed media over SSH into local LibVLC, with local sound and byte-range seeking. Requires Python 3 on a Linux/macOS server and currently opens one regular file.
+- Forwarded audio volume uses explicit requested gain; receiver regressions cover packet jitter and early device callbacks instead of accepting startup-only audio evidence.
 - Fullscreen uses the complete terminal grid when text overlays are hidden. Host profile padding and aspect-ratio bars remain separate settings/behavior.
 
 ### Validation and limits

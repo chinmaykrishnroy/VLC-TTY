@@ -4,6 +4,7 @@ pub fn print(portable: bool) {
         "VLC-TTY {} — video inside your terminal\n\n\
 Usage: vlc-tty [OPTIONS] [FILE|FOLDER|URL]\n\n\
        vlc-tty connect USER@HOST MEDIA [PLAYER OPTIONS]\n\
+       vlc-tty stream USER@HOST REMOTE_FILE [LOCAL PLAYER OPTIONS]\n\
        vlc-tty audio-receive --listen ADDRESS --token-file PATH\n\n\
   -h, --help            Show this help and exit\n\
   -V, --version         Show the application version\n\
@@ -32,6 +33,7 @@ SSH sessions are detected automatically; explicit flags override defaults.\n\
 Allocate a terminal with ssh -t. Pixel graphics depend on your client terminal;\n\
 ANSI half-blocks are the fallback. Plain SSH does not forward audio.\n\
 The experimental connect helper forwards audio; use connect --help for details.\n\n\
+Use stream USER@HOST FILE for original compressed bytes and local playback.\n\n\
 Keyboard: Space pause; s stop; f/F11 fullscreen; arrows seek; +/- volume;\n\
 m mute; [/] speed; = normal speed; e next frame; n/p next/previous;\n\
 z shuffle; Shift+R repeat off/all/one;\n\

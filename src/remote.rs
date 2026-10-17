@@ -14,16 +14,22 @@ pub fn dispatch() -> Result<bool> {
     let Some(command) = args.next() else {
         return Ok(false);
     };
-    if command != "connect" && command != "audio-receive" {
+    if command != "connect" && command != "audio-receive" && command != "stream" {
         return Ok(false);
     }
     let args: Vec<_> = args.collect();
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        if command == "connect" {
+        if command == "stream" {
+            println!("Usage: vlc-tty stream USER@HOST REMOTE_FILE [LOCAL PLAYER OPTIONS]\n\nStreams the original compressed file over SSH into local LibVLC.\nLocal speakers, volume, pause and byte-range seeking use normal local playback.\nNeeds ssh locally and Python 3 on the Linux/macOS server; no remote player required.\nSingle regular files only; directories and remote playlists are not yet supported.\nUse connect when the server should decode media and render the terminal UI.");
+        } else if command == "connect" {
             println!("Usage: vlc-tty connect USER@HOST MEDIA [PLAYER OPTIONS]\n\nRuns the installed remote vlc-tty through OpenSSH with a private audio tunnel.\nNeeds matching audio-capable VLC-TTY on the server, local speakers, and ssh on PATH.\nSSH config aliases and saved keys are supported. Host-key checks use OpenSSH defaults.\nUse --remote-command PATH after MEDIA for a custom server executable.\nUse --silent for video only, or --audio-output local for server speakers.\nRemote audio is experimental; measured client lip-sync is not yet validated.");
         } else {
             println!("Usage: vlc-tty audio-receive --listen 127.0.0.1:47650 --token-file PATH\n\nReceives one authenticated S16LE 48kHz stereo session on loopback.\nPATH must contain a 64-character hexadecimal session key shared privately with\n--audio-token-file on the sender. Prefer connect for automatic key/tunnel cleanup.");
         }
+        return Ok(true);
+    }
+    if command == "stream" {
+        crate::remote_file::stream(&args)?;
         return Ok(true);
     }
     #[cfg(not(feature = "audio-client"))]
@@ -72,12 +78,23 @@ fn receive(args: &[String]) -> Result<()> {
     }
 }
 
-#[cfg(any(feature = "audio-client", test))]
-fn quote(value: &str) -> Result<String> {
+pub(crate) fn quote(value: &str) -> Result<String> {
     if value.contains(['\0', '\n', '\r']) {
         bail!("Remote arguments cannot contain NUL or newlines");
     }
     Ok(format!("'{}'", value.replace('\'', "'\"'\"'")))
+}
+
+pub(crate) fn validate_host(host: &str) -> Result<()> {
+    if host.starts_with('-')
+        || host.is_empty()
+        || !host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"@._-:[]".contains(&b))
+    {
+        bail!("Invalid SSH destination; use a host or configured SSH alias");
+    }
+    Ok(())
 }
 
 #[cfg(feature = "audio-client")]
@@ -87,14 +104,7 @@ fn connect(args: &[String]) -> Result<()> {
         bail!("Usage: vlc-tty connect USER@HOST MEDIA [PLAYER OPTIONS]");
     }
     let host = &args[0];
-    if host.starts_with('-')
-        || host.is_empty()
-        || !host
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"@._-:[]".contains(&b))
-    {
-        bail!("Invalid SSH destination; use a host or configured SSH alias");
-    }
+    validate_host(host)?;
     if !std::io::IsTerminal::is_terminal(&std::io::stdin())
         || !std::io::IsTerminal::is_terminal(&std::io::stdout())
     {

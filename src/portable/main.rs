@@ -122,7 +122,7 @@ fn run() -> Result<u8> {
 fn informational(args: &[OsString], flags: &[&str]) -> bool {
     if args
         .first()
-        .is_some_and(|arg| arg == "connect" || arg == "audio-receive")
+        .is_some_and(|arg| arg == "connect" || arg == "audio-receive" || arg == "stream")
     {
         return false;
     }
@@ -183,6 +183,10 @@ mod tests {
         assert!(!informational(&args(&["--", "--help"]), &["--help", "-h"]));
         assert!(!informational(
             &args(&["--subtitle", "--help"]),
+            &["--help", "-h"]
+        ));
+        assert!(!informational(
+            &args(&["stream", "--help"]),
             &["--help", "-h"]
         ));
     }

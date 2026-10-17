@@ -16,6 +16,20 @@ The receiver estimates presentation time using CPAL callback/playback timestamps
 
 Public publication remains blocked by strict Windows/macOS runtime source-correspondence verification. There is no preview bypass.
 
+## Remote music regression checks — October 18, 2026
+
+The user's Pi MP3 exposed gaps that the earlier interaction smoke had not excluded. A 20-second uninterrupted baseline through the previous CI executable recorded 53 additional receiver underrun callbacks after the four-second startup exclusion. The song is 397.826667 seconds long with a measured average bit rate of 133,730 bit/s; the fixed PCM payload is 1,536,000 bit/s before framing, about 11.5 times as much.
+
+Two deterministic receiver regressions were first observed failing: an eight-millisecond packet-arrival variation inserted silence at frame 960 despite buffered PCM, and a device callback arriving three milliseconds early inserted silence at frame 480. The receiver now anchors a continuous generation timeline and lets the hardware clock consume buffered audio after priming. A 400 ms provisional jitter allowance and bounded 750 ms ready queue tolerate the observed SSH delivery bursts; this adds latency and can exceed the existing 250 ms video correction cap. Physical A/V alignment remains open.
+
+With those changes, the same MP3 passed a 45-second physical Pi-to-Windows/default-WASAPI test with **zero additional underrun callbacks after startup**, zero decoder callback drops, 40,646 ms of steady playback-clock progress, normal exit and terminal restoration. There were still 126 startup underrun callbacks. This is a short device-output continuity check, not a microphone recording, audible-quality certification or movie-length acceptance. Adding a larger buffer without fixing callback scheduling had failed the same continuity gate; it was not accepted as the fix by itself.
+
+The native LibVLC regression also reproduced the custom output reporting zero after requesting 100 percent. Forwarded volume is now tracked explicitly and applied before transmission without restarting playback on volume changes. Tests verify gain scaling/clipping plus actual transmitted silence and restored nonzero decoded samples. Previously transmitted audio retains its old gain until consumed.
+
+The separate `stream` command transfers the original compressed file through an SSH loopback forward and HTTP byte ranges into local LibVLC. It decoded real Pi video on Windows (14 frames, clock 402 ms) and ran the user's MP3 for 337.6 seconds with pause, seek, mute/unmute and normal quit. The last playback clock was 306.1 seconds after those controls, and all profiling samples confirmed PCM forwarding was disabled. These counters do not certify audible continuity. The real HTTP server regression passed on the Pi, including full/range/suffix/HEAD requests, rejection of other paths and invalid ranges, and server shutdown when its input pipe closes.
+
+For the uninterrupted device check, use the existing audio smoke command with `--steady-audio --duration 45`. It requires matching client/server builds and fails if the receiver records any additional underrun callback after startup; audio-only files do not need a video-glyph assertion. Single-file streaming currently lacks remote directory/playlist expansion and the local-file artwork/tag extraction path for network media.
+
 ## Longer pixel-encoder stress result
 
 Two independent server PTY sinks ran concurrently on the Pi for 660 seconds using the synthetic 720p fixture and a requested limit of 15 FPS. Both restored the terminal and answered 21 help probes. Neither emitted an encoding error.
