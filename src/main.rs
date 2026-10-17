@@ -8,6 +8,7 @@ mod metadata;
 mod options;
 mod playback;
 mod playlist;
+mod profiling;
 mod queue;
 mod renderer;
 mod subtitles;
@@ -39,6 +40,10 @@ use ratatui::{
 use std::{
     io::{self, IsTerminal, Stdout},
     path::Path,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -87,6 +92,7 @@ fn smoke_test(
 }
 /// Restore raw mode, mouse and alternate screen on any return path, including errors.
 struct TerminalGuard;
+type AppTerminal = Terminal<CrosstermBackend<profiling::CountingWriter<Stdout>>>;
 /// Ratatui's clear() preserves the cursor by querying the terminal. On a remote
 /// terminal without cursor-report replies that query times out and consumes input.
 /// Resizing our fullscreen viewport to its current size resets its buffers and
@@ -110,7 +116,7 @@ impl Drop for SynchronizedUpdate {
     }
 }
 impl TerminalGuard {
-    fn enter() -> Result<(Self, Terminal<CrosstermBackend<Stdout>>)> {
+    fn enter(profiling_enabled: bool) -> Result<(Self, AppTerminal, Arc<AtomicU64>)> {
         enable_raw_mode()?;
         if let Err(e) = execute!(
             io::stdout(),
@@ -124,8 +130,10 @@ impl TerminalGuard {
             return Err(e.into());
         }
         let guard = Self;
-        let terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
-        Ok((guard, terminal))
+        let writer = profiling::CountingWriter::new(io::stdout(), profiling_enabled);
+        let bytes = writer.bytes.clone();
+        let terminal = Terminal::new(CrosstermBackend::new(writer))?;
+        Ok((guard, terminal, bytes))
     }
 }
 impl Drop for TerminalGuard {
@@ -213,8 +221,15 @@ fn run() -> Result<()> {
     if !opts.smoke_test && (!io::stdin().is_terminal() || !io::stdout().is_terminal()) {
         bail!("Interactive playback requires a terminal on stdin and stdout. Use ssh -t, or --smoke-test MEDIA for headless decoding checks.");
     }
+    let mut recorder = opts
+        .metrics
+        .as_deref()
+        .map(|path| profiling::Recorder::create(Path::new(path)))
+        .transpose()
+        .context("Could not create profiling file; choose a new writable path")?;
     let mut player = VlcPlayer::configured(opts.native_window, opts.silent, opts.decode_height)
         .context("Could not load LibVLC 3.x; run vlc-tty --doctor")?;
+    player.enable_profiling(recorder.is_some());
     if opts.smoke_test {
         return smoke_test(
             &mut player,
@@ -245,9 +260,13 @@ fn run() -> Result<()> {
     if opts.shuffle {
         app.queue.toggle_shuffle();
     }
-    let (_guard, mut terminal) = TerminalGuard::enter()?;
+    let (_guard, mut terminal, output_bytes) = TerminalGuard::enter(recorder.is_some())?;
     // Query pixel-graphics support before the event loop begins consuming stdin.
-    let mut graphics = GraphicsRenderer::new(opts.graphics, opts.fps);
+    let mut graphics = GraphicsRenderer::new(
+        opts.graphics,
+        opts.fps,
+        recorder.as_ref().map(|recorder| recorder.encoder.clone()),
+    );
     if opts.graphics == GraphicsChoice::Auto {
         app.notify(format!(
             "Rendering: {} (detected: {})",
@@ -343,6 +362,7 @@ fn run() -> Result<()> {
         if last_draw.elapsed() >= interval {
             let info = player.snapshot();
             let sync_update = SynchronizedUpdate::enter()?;
+            let draw_started = Instant::now();
             terminal.draw(|f| {
                 zones = renderer::draw(
                     f,
@@ -354,6 +374,16 @@ fn run() -> Result<()> {
                 )
             })?;
             drop(sync_update);
+            let drawn = graphics.take_drawn();
+            if let Some(recorder) = &mut recorder {
+                recorder.record(
+                    player.decode_metrics(),
+                    output_bytes.load(Ordering::Relaxed),
+                    drawn,
+                    draw_started.elapsed(),
+                    &info,
+                )?;
+            }
             last_draw = Instant::now();
         }
     }

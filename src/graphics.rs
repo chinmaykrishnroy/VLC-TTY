@@ -11,6 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::profiling::EncoderMetrics;
 use crate::{latest, vlc::VideoFrame};
 use image::{DynamicImage, RgbImage, Rgba};
 use ratatui::{
@@ -22,6 +23,7 @@ use ratatui_image::{
     protocol::Protocol,
     FontSize, Image, Resize,
 };
+use std::sync::atomic::Ordering;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraphicsChoice {
@@ -62,6 +64,7 @@ struct EncodeRequest {
     generation: u64,
     frame: Arc<VideoFrame>,
     area: Size,
+    queued_at: Instant,
 }
 struct EncodeResult {
     generation: u64,
@@ -86,10 +89,12 @@ pub struct GraphicsRenderer {
     error_note: Option<String>,
     kitty_id: u32,
     is_tmux: bool,
+    metrics: Option<Arc<EncoderMetrics>>,
+    drawn: Option<(u64, u64)>,
 }
 
 impl GraphicsRenderer {
-    pub fn new(choice: GraphicsChoice, max_fps: u32) -> Self {
+    pub fn new(choice: GraphicsChoice, max_fps: u32, metrics: Option<Arc<EncoderMetrics>>) -> Self {
         // Do this after entering raw mode, before the first crossterm read.
         let mut picker = if choice == GraphicsChoice::Ansi {
             Picker::halfblocks()
@@ -113,8 +118,13 @@ impl GraphicsRenderer {
         let compress = picker
             .capabilities()
             .contains(&Capability::KittyCompression);
+        let worker_metrics = metrics.clone();
         thread::spawn(move || {
             while let Some(req) = requests.recv() {
+                let started = Instant::now();
+                if let Some(metrics) = &worker_metrics {
+                    metrics.queue_wait.observe(req.queued_at.elapsed());
+                }
                 let result = if protocol_kind == ProtocolType::Sixel {
                     encode_sixel_fast(&req.frame, req.area, font_size, is_tmux)
                 } else {
@@ -128,14 +138,28 @@ impl GraphicsRenderer {
                         compress,
                     )
                 };
+                if let Some(metrics) = &worker_metrics {
+                    metrics.encode.observe(started.elapsed());
+                    if result.is_ok() {
+                        metrics.encoded.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        metrics.failures.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
                 let result = EncodeResult {
                     generation: req.generation,
                     serial: req.frame.serial,
                     area: req.area,
                     result,
                 };
-                if response_tx.replace(result).is_err() {
-                    break;
+                match response_tx.replace(result) {
+                    Ok(true) => {
+                        if let Some(metrics) = &worker_metrics {
+                            metrics.responses_replaced.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(_) => break,
                 }
             }
         });
@@ -155,12 +179,15 @@ impl GraphicsRenderer {
             error_note: None,
             kitty_id,
             is_tmux,
+            metrics,
+            drawn: None,
         }
     }
 
     /// Clear the cached frame on media changes, fullscreen transitions and resizes.
     /// In-flight worker results for the old rectangle are ignored after resize.
     pub fn invalidate(&mut self) {
+        self.drawn = None;
         self.clear_owned_image();
         self.generation = self.generation.wrapping_add(1);
         self.last_submitted = None;
@@ -213,7 +240,13 @@ impl GraphicsRenderer {
 
     pub fn prepare(&mut self, frame: Option<Arc<VideoFrame>>) {
         if let Some(completed) = self.responses.try_take().filter(|completed| {
-            completed.generation == self.generation && completed.area == self.area
+            let valid = completed.generation == self.generation && completed.area == self.area;
+            if !valid {
+                if let Some(metrics) = &self.metrics {
+                    metrics.stale.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            valid
         }) {
             match completed.result {
                 Ok(proto) => {
@@ -241,20 +274,26 @@ impl GraphicsRenderer {
             if frame.serial == self.current_serial || self.last_submitted == Some(key) {
                 return;
             }
-            if self
-                .request_tx
-                .replace(EncodeRequest {
-                    generation: self.generation,
-                    frame,
-                    area: self.area,
-                })
-                .is_ok()
-            {
-                self.last_submitted = Some(key);
-                self.last_request_at = Instant::now();
-            } else {
-                self.ansi_override = true;
-                self.error_note = Some("Graphics worker stopped; using ANSI".into());
+            match self.request_tx.replace(EncodeRequest {
+                generation: self.generation,
+                frame,
+                area: self.area,
+                queued_at: Instant::now(),
+            }) {
+                Ok(replaced) => {
+                    if let Some(metrics) = &self.metrics {
+                        metrics.requests.fetch_add(1, Ordering::Relaxed);
+                        if replaced {
+                            metrics.pending_replaced.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    self.last_submitted = Some(key);
+                    self.last_request_at = Instant::now();
+                }
+                Err(_) => {
+                    self.ansi_override = true;
+                    self.error_note = Some("Graphics worker stopped; using ANSI".into());
+                }
             }
         }
     }
@@ -284,8 +323,15 @@ impl GraphicsRenderer {
                     h,
                 );
                 f.render_widget(Image::new(protocol), centered);
+                self.drawn = Some((self.generation, self.current_serial));
             }
         }
+    }
+    pub fn mark_ansi_drawn(&mut self, serial: u64) {
+        self.drawn = Some((self.generation, serial));
+    }
+    pub fn take_drawn(&mut self) -> Option<(u64, u64)> {
+        self.drawn.take()
     }
 }
 
@@ -461,7 +507,7 @@ mod tests {
 
     #[test]
     fn invalidation_rejects_old_frame_even_at_same_dimensions() {
-        let mut renderer = GraphicsRenderer::new(GraphicsChoice::Ansi, 60);
+        let mut renderer = GraphicsRenderer::new(GraphicsChoice::Ansi, 60, None);
         let (sender, receiver) = latest::channel();
         renderer.responses = receiver;
         let size = Size::new(2, 1);

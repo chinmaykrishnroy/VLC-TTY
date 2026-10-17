@@ -9,6 +9,7 @@ pub struct Options {
     pub subtitle: Option<String>,
     pub playlist: Option<String>,
     pub export_playlist: Option<String>,
+    pub metrics: Option<String>,
     pub repeat: RepeatMode,
     pub shuffle: bool,
     pub volume: i32,
@@ -36,6 +37,7 @@ impl Options {
             subtitle: None,
             playlist: None,
             export_playlist: None,
+            metrics: None,
             repeat: RepeatMode::Off,
             shuffle: false,
             volume: 100,
@@ -101,6 +103,7 @@ impl Options {
                 "--audio" => silent = Some(false),
                 "--native-window" => out.native_window = true,
                 "--shuffle" => out.shuffle = true,
+                "--metrics" => out.metrics = Some(value()?),
                 "--playlist" => out.playlist = Some(value()?),
                 "--export-playlist" => out.export_playlist = Some(value()?),
                 "--repeat" => {
@@ -144,6 +147,13 @@ impl Options {
         }
         if out.media.is_some() && out.playlist.is_some() {
             bail!("Specify either media or --playlist, not both");
+        }
+        if out.metrics.is_some()
+            && (out.doctor || out.smoke_test || out.export_playlist.is_some() || out.native_window)
+        {
+            bail!(
+                "--metrics profiles terminal playback; omit diagnostic/export/native-window modes"
+            );
         }
         if !(0..=125).contains(&out.volume) {
             bail!("--volume must be between 0 and 125");
@@ -235,6 +245,9 @@ mod tests {
             vec!["--shuffle=false"],
             vec!["--repeat=invalid"],
             vec!["--playlist", "queue.m3u", "movie.mp4"],
+            vec!["--metrics=run.jsonl", "--doctor"],
+            vec!["--metrics=run.jsonl", "--native-window"],
+            vec!["--metrics=run.jsonl", "--smoke-test", "movie.mp4"],
         ] {
             assert!(parse(&args, false).is_err(), "{args:?}");
         }

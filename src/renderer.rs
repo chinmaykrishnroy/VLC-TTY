@@ -228,20 +228,21 @@ fn empty_welcome(f: &mut Frame, area: Rect) {
     }
     f.render_widget(Block::default().style(Style::default().bg(BG_DARK)), area);
 
-    let cone_h = 14.min(area.height.saturating_sub(4));
-    let cone_y = area.y + area.height.saturating_sub(cone_h + 4) / 2;
+    let cone_h = 14.min(area.height.saturating_sub(5));
+    let cone_y = area.y + area.height.saturating_sub(cone_h + 5) / 2;
     let cone_area = Rect::new(area.x, cone_y, area.width, cone_h);
     vlc_cone_logo(f, cone_area);
 
-    let text_y = cone_area.bottom().min(area.bottom().saturating_sub(3));
+    let text_y = cone_area.bottom().min(area.bottom().saturating_sub(4));
     let text_area = Rect::new(
         area.x,
         text_y,
         area.width,
-        3.min(area.height.saturating_sub(text_y.saturating_sub(area.y))),
+        4.min(area.height.saturating_sub(text_y.saturating_sub(area.y))),
     );
     let text = Paragraph::new(vec![
-        Line::styled("VLC-TTY", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
+        Line::styled("VLC Media Player", Style::default().fg(ORANGE).add_modifier(Modifier::BOLD)),
+        Line::styled("VLC-TTY · Independent LibVLC terminal player", Style::default().fg(DIM)),
         Line::styled("Drag and drop any media file here, or press Ctrl+O to open.", Style::default().fg(PALE)),
         Line::styled("Space: Play/Pause  -  Ctrl+O: Open File  -  F: Fullscreen  -  Tab: Playlist  -  ?: Help", Style::default().fg(DIM)),
     ]).alignment(Alignment::Center);
@@ -392,6 +393,9 @@ fn video(
             graphics.draw(f, area);
         } else {
             render_ansi_video(f, img, area);
+            if area.width > 0 && area.height > 0 {
+                graphics.mark_ansi_drawn(img.serial);
+            }
         }
     }
 }
@@ -1285,7 +1289,7 @@ mod tests {
         use ratatui::{backend::TestBackend, Terminal};
         let mut terminal = Terminal::new(TestBackend::new(100, 32)).unwrap();
         let app = App::new(Some(std::path::Path::new(".")));
-        let mut graphics = GraphicsRenderer::new(GraphicsChoice::Ansi, 60);
+        let mut graphics = GraphicsRenderer::new(GraphicsChoice::Ansi, 60, None);
         let info = PlaybackSnapshot {
             time_ms: 0,
             length_ms: 8000,
@@ -1316,7 +1320,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(90, 30)).unwrap();
         let mut app = App::new(Some(std::path::Path::new(".")));
         app.toggle_fullscreen();
-        let mut graphics = GraphicsRenderer::new(GraphicsChoice::Ansi, 60);
+        let mut graphics = GraphicsRenderer::new(GraphicsChoice::Ansi, 60, None);
         let info = PlaybackSnapshot {
             time_ms: 1000,
             length_ms: 2000,

@@ -142,6 +142,7 @@ fn informational(args: &[OsString], flags: &[&str]) -> bool {
             "--repeat",
             "--volume",
             "--rate",
+            "--metrics",
             "--extract-to",
         ]
         .iter()

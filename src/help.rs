@@ -18,6 +18,7 @@ Usage: vlc-tty [OPTIONS] [FILE|FOLDER|URL]\n\n\
   --shuffle             Shuffle queue, keeping the current item first\n\
   --volume N            Initial volume, 0–125 (default: 100)\n\
   --rate N              Initial speed, 0.25–4 (default: 1)\n\
+  --metrics PATH        Record server profiling JSONL to a new file\n\
   --native-window       Separate video window, local desktop only\n\
   --doctor              Print runtime/session diagnostics without a TUI\n\
   --smoke-test MEDIA    Require decoded frames and an advancing clock\n\

@@ -33,7 +33,7 @@ impl<T> Shared<T> {
 }
 
 impl<T> Sender<T> {
-    pub fn replace(&self, value: T) -> Result<(), T> {
+    pub fn replace(&self, value: T) -> Result<bool, T> {
         let mut state = self
             .0
             .state
@@ -42,9 +42,9 @@ impl<T> Sender<T> {
         if state.closed {
             return Err(value);
         }
-        state.value = Some(value);
+        let replaced = state.value.replace(value).is_some();
         self.0.ready.notify_one();
-        Ok(())
+        Ok(replaced)
     }
     pub fn clear(&self) {
         self.0
@@ -95,6 +95,13 @@ impl<T> Drop for Receiver<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn replacement_reports_discarded_pending_work() {
+        let (sender, receiver) = channel();
+        assert_eq!(sender.replace(1), Ok(false));
+        assert_eq!(sender.replace(2), Ok(true));
+        assert_eq!(receiver.try_take(), Some(2));
+    }
     #[test]
     fn pending_frames_are_replaced_without_waiting_for_consumer() {
         let (sender, receiver) = channel();

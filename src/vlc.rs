@@ -15,7 +15,7 @@ use std::{
     path::{Path, PathBuf},
     ptr,
     sync::{
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
 };
@@ -42,6 +42,11 @@ struct FrameStore {
     size: Mutex<Size>,
     latest: Mutex<Option<Arc<VideoFrame>>>,
     presented: AtomicU64,
+    profiling: AtomicBool,
+    picture_allocations: AtomicU64,
+    picture_bytes: AtomicU64,
+    copied_bytes: AtomicU64,
+    copy_us: AtomicU64,
 }
 struct CallbackContext {
     frames: Arc<FrameStore>,
@@ -150,6 +155,14 @@ unsafe extern "C" fn lock_video(opaque: *mut c_void, planes: *mut *mut c_void) -
         handle_alloc_error(layout)
     }
     *planes = data.cast();
+    if ctx.frames.profiling.load(Ordering::Relaxed) {
+        ctx.frames
+            .picture_allocations
+            .fetch_add(1, Ordering::Relaxed);
+        ctx.frames
+            .picture_bytes
+            .fetch_add(bytes as u64, Ordering::Relaxed);
+    }
     Box::into_raw(Box::new(Picture {
         data,
         layout,
@@ -179,7 +192,21 @@ unsafe extern "C" fn display_video(opaque: *mut c_void, picture: *mut c_void) {
         return;
     }
     let ctx = &*(opaque as *const CallbackContext);
+    let measure = ctx
+        .frames
+        .profiling
+        .load(Ordering::Relaxed)
+        .then(std::time::Instant::now);
     let data = std::slice::from_raw_parts(pic.data, pic.layout.size()).to_vec();
+    if let Some(started) = measure {
+        ctx.frames
+            .copied_bytes
+            .fetch_add(data.len() as u64, Ordering::Relaxed);
+        ctx.frames.copy_us.fetch_add(
+            started.elapsed().as_micros().min(u64::MAX as u128) as u64,
+            Ordering::Relaxed,
+        );
+    }
     let serial = ctx.frames.presented.fetch_add(1, Ordering::Relaxed) + 1;
     let frame = Arc::new(VideoFrame {
         width: pic.width,
@@ -496,6 +523,16 @@ pub struct VlcPlayer {
     native_window: bool,
 }
 
+#[derive(Default)]
+pub struct DecodeMetrics {
+    pub frames: u64,
+    pub picture_allocations: u64,
+    pub picture_bytes: u64,
+    pub owned_frames: u64,
+    pub copied_bytes: u64,
+    pub copy_us: u64,
+}
+
 fn clean_path_for_vlc(path: &Path) -> Result<String> {
     if !path.exists() {
         bail!("file not found: {}", path.display());
@@ -766,6 +803,24 @@ impl VlcPlayer {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
     }
+    pub fn enable_profiling(&self, enabled: bool) {
+        self.context
+            .frames
+            .profiling
+            .store(enabled, Ordering::Relaxed);
+    }
+    pub fn decode_metrics(&self) -> DecodeMetrics {
+        let frames = &self.context.frames;
+        let presented = frames.presented.load(Ordering::Relaxed);
+        DecodeMetrics {
+            frames: presented,
+            picture_allocations: frames.picture_allocations.load(Ordering::Relaxed),
+            picture_bytes: frames.picture_bytes.load(Ordering::Relaxed),
+            owned_frames: presented,
+            copied_bytes: frames.copied_bytes.load(Ordering::Relaxed),
+            copy_us: frames.copy_us.load(Ordering::Relaxed),
+        }
+    }
     pub fn snapshot(&self) -> PlaybackSnapshot {
         unsafe {
             PlaybackSnapshot {
@@ -949,6 +1004,7 @@ mod tests {
     #[ignore = "requires installed LibVLC 3; run with --ignored --test-threads=1"]
     fn real_silent_playback_needs_no_audio_device_and_respects_decode_cap() {
         let mut player = VlcPlayer::configured(false, true, 90).unwrap();
+        player.enable_profiling(true);
         let sample = Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/sample.mp4");
         player.open(sample.to_str().unwrap()).unwrap();
         wait_for_decoded_progress(&player);
@@ -956,6 +1012,14 @@ mod tests {
         assert!(frame.height <= 90 && frame.width <= 160);
         assert_eq!(player.current_audio_id(), -1);
         player.stop();
+        let metrics = player.decode_metrics();
+        assert!(metrics.frames >= 3);
+        assert!(metrics.picture_allocations >= metrics.owned_frames);
+        assert!(metrics.copied_bytes >= metrics.owned_frames * frame.bgra.len() as u64);
+        eprintln!(
+            "Video allocation metrics: {} pictures, {} presented copies, {} copied bytes",
+            metrics.picture_allocations, metrics.owned_frames, metrics.copied_bytes
+        );
     }
 
     fn http_response(request: &str, body: &[u8]) -> Vec<u8> {
