@@ -42,9 +42,13 @@ def collect_linux(destination):
     if not plugin_root.is_dir():
         raise RuntimeError("LibVLC base plugins are missing")
     libraries = {libvlc}
+    # The optional CPAL receiver links ALSA even when server playback is silent.
+    # Include application dependencies as well as LibVLC/plugin dependencies.
+    # build_portable supplies this only after the thin player has been built.
+    application = os.environ.get("VLC_TTY_COLLECT_APPLICATION")
     plugins = list(plugin_root.rglob("*.so"))
     packages = {"libvlc5", "libvlccore9", "vlc-plugin-base", "vlc-data"}
-    for binary in [libvlc, *plugins]:
+    for binary in [libvlc, *plugins, *([Path(application)] if application else [])]:
         linked = subprocess.run(["ldd", str(binary)], text=True, capture_output=True, check=True).stdout
         if "not found" in linked:
             raise RuntimeError(f"Unresolved runtime dependencies for {binary}: {linked}")

@@ -9,7 +9,7 @@ import subprocess
 import time
 
 
-def smoke(binary, media, duration=12, expect_caption=None):
+def smoke(binary, media, duration=12, expect_caption=None, audio_endpoint=None, audio_token_file=None, metrics=None):
     import fcntl
     import pty
     import termios
@@ -23,7 +23,10 @@ def smoke(binary, media, duration=12, expect_caption=None):
 
     env = {key: value for key, value in os.environ.items() if key not in ("DISPLAY", "WAYLAND_DISPLAY")}
     env["TERM"] = "xterm-256color"
-    process = subprocess.Popen([str(binary.resolve()), "--ssh", "--graphics", "ansi", str(media.resolve())],
+    audio = (["--audio-output", "remote", "--audio-endpoint", audio_endpoint,
+              "--audio-token-file", str(audio_token_file)] if audio_endpoint and audio_token_file else ["--silent"])
+    profile = ["--metrics", str(metrics)] if metrics else []
+    process = subprocess.Popen([str(binary.resolve()), "--ssh", *audio, *profile, "--graphics", "ansi", str(media.resolve())],
                                stdin=slave, stdout=slave, stderr=slave, env=env, preexec_fn=child_setup)
     os.close(slave)
     captured = bytearray()
@@ -109,6 +112,9 @@ def smoke(binary, media, duration=12, expect_caption=None):
             "average_cpu_one_core_percent": round(cpu_ticks / os.sysconf("SC_CLK_TCK") / elapsed * 100, 2) if cpu_ticks else None,
             "resource_scope": "launcher and descendants; summed RSS may count shared pages twice" if peak_rss_kib else None,
         }
+        if metrics and metrics.exists():
+            lines = metrics.read_text().splitlines()
+            result["last_application_sample"] = json.loads(lines[-1]) if lines else None
         if expect_caption:
             result["caption_present"] = expect_caption.encode() in captured
         print(json.dumps(result, indent=2))
@@ -137,5 +143,10 @@ if __name__ == "__main__":
     parser.add_argument("media", type=Path)
     parser.add_argument("--duration", type=float, default=12)
     parser.add_argument("--expect-caption")
+    parser.add_argument("--metrics", type=Path)
+    parser.add_argument("--audio-endpoint")
+    parser.add_argument("--audio-token-file", type=Path)
     args = parser.parse_args()
-    smoke(args.binary, args.media, args.duration, args.expect_caption)
+    if bool(args.audio_endpoint) != bool(args.audio_token_file):
+        parser.error("audio endpoint and token file are required together")
+    smoke(args.binary, args.media, args.duration, args.expect_caption, args.audio_endpoint, args.audio_token_file, args.metrics)

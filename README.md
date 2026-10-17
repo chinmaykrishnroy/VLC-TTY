@@ -59,7 +59,7 @@ vlc-tty --ssh --doctor
 vlc-tty --ssh --smoke-test /path/to/movie.mp4
 ```
 
-The smoke check requires decoded frames and an advancing playback clock, without opening a UI. Sound is not forwarded to SSH client speakers. Read the [SSH guide](docs/SSH.md) for terminal setup, tmux and Pi acceptance checks.
+The smoke check requires decoded frames and an advancing playback clock, without opening a UI. Plain SSH does not forward sound to client speakers. An [experimental audio helper](docs/REMOTE-AUDIO.md) is in development; synchronized remote audio is not yet validated. Read the [SSH guide](docs/SSH.md) for terminal setup, tmux and Pi acceptance checks.
 
 ## Controls
 
@@ -80,6 +80,8 @@ The smoke check requires decoded frames and an advancing playback clock, without
 | `?` / `i` / `q` | Help / media information / quit |
 
 Mouse controls and menus are available where terminal mouse reporting is supported. Fullscreen changes the application layout. Use the terminal's own controls for OS-window fullscreen.
+
+For outer borders in Windows Terminal, set profile padding to `0` and hide its scrollbar; see the [terminal appearance guide](docs/WINDOWS-TERMINAL.md). Artwork/video keeps its aspect ratio, so differently shaped media can still have black bars.
 
 ## Documentation
 

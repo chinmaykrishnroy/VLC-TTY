@@ -538,10 +538,21 @@ impl App {
         if state == 6 {
             if let Some(index) = self.queue.adjacent_index(1, true) {
                 let source = self.queue.sources()[index].clone();
+                let view = self.view_mode;
+                let overlay = self.overlay;
+                let menu = self.active_menu;
                 if let Err(error) = self.open_media(&source, player) {
                     self.notify(format!("Open error: {error:#}"));
                 } else {
                     self.queue.set_position(index);
+                    // A natural transition must not dismiss help or pull the
+                    // user out of a file/queue browser. Track pickers describe
+                    // the old media and still close when that media changes.
+                    self.view_mode = view;
+                    if matches!(overlay, Overlay::Help | Overlay::Info) {
+                        self.overlay = overlay;
+                    }
+                    self.active_menu = menu;
                 }
             } else {
                 self.notify("End of playback queue");
@@ -1584,6 +1595,21 @@ mod tests {
         app.native_dialogs = false;
         app.open_file_picker(&mut player).unwrap();
         assert!(app.input.is_some());
+    }
+    #[test]
+    fn natural_queue_advance_preserves_help_and_browser_context() {
+        let mut app = App::new(None);
+        let mut player = FakePlayback::default();
+        app.open_media("http://fixture/movie.mp4", &mut player)
+            .unwrap();
+        app.queue.repeat = crate::queue::RepeatMode::All;
+        app.overlay = Overlay::Help;
+        app.view_mode = ViewMode::Browser;
+        player.state = 6;
+        app.tick(&mut player);
+        assert_eq!(player.opened.len(), 2);
+        assert_eq!(app.overlay, Overlay::Help);
+        assert_eq!(app.view_mode, ViewMode::Browser);
     }
 
     #[test]

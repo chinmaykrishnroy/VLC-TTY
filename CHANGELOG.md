@@ -11,6 +11,11 @@
 - Statically link the Windows C runtime and supervise the extracted player's lifetime.
 - Preserve portable help with combined options and gate publication on verified runtime source provenance.
 - Report missing media paths before starting the terminal or decoder; exercise real CLI playlist export without either dependency.
+- Add opt-in server profiling and reproducible PTY benchmarks with separate callback, encoding, draw and byte counters.
+- Add experimental authenticated PCM forwarding, a CPAL receiver and an OpenSSH connect helper; keep direct SSH audio limitations explicit.
+- Pace audio on a network worker, invalidate old generations, and estimate receiver presentation timing with a bounded video history.
+- Remove permanent fullscreen OSD/caption bands while overlays are hidden; document host terminal padding separately.
+- Avoid background terminal probes stealing keyboard input after timeout, and preserve help/browser context across natural queue transitions.
 
 
 ## 0.6.0 (development)

@@ -19,7 +19,7 @@ use ratatui::{
     Frame,
 };
 use ratatui_image::{
-    picker::{Capability, Picker, ProtocolType},
+    picker::{Capability, ProtocolType},
     protocol::Protocol,
     FontSize, Image, Resize,
 };
@@ -90,17 +90,16 @@ pub struct GraphicsRenderer {
     kitty_id: u32,
     is_tmux: bool,
     metrics: Option<Arc<EncoderMetrics>>,
+    encode_latency_us: Arc<std::sync::atomic::AtomicU64>,
     drawn: Option<(u64, u64)>,
+    startup_events: std::collections::VecDeque<ratatui::crossterm::event::Event>,
 }
 
 impl GraphicsRenderer {
     pub fn new(choice: GraphicsChoice, max_fps: u32, metrics: Option<Arc<EncoderMetrics>>) -> Self {
         // Do this after entering raw mode, before the first crossterm read.
-        let mut picker = if choice == GraphicsChoice::Ansi {
-            Picker::halfblocks()
-        } else {
-            Picker::from_query_stdio().unwrap_or_else(|_| Picker::halfblocks())
-        };
+        let (mut picker, startup_events) =
+            crate::terminal_probe::detect(choice != GraphicsChoice::Ansi);
         let detected = picker.protocol_type();
         if let Some(forced) = choice.forced_protocol() {
             picker.set_protocol_type(forced);
@@ -119,6 +118,8 @@ impl GraphicsRenderer {
             .capabilities()
             .contains(&Capability::KittyCompression);
         let worker_metrics = metrics.clone();
+        let encode_latency_us = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let worker_latency = encode_latency_us.clone();
         thread::spawn(move || {
             while let Some(req) = requests.recv() {
                 let started = Instant::now();
@@ -138,6 +139,7 @@ impl GraphicsRenderer {
                         compress,
                     )
                 };
+                worker_latency.store(started.elapsed().as_micros() as u64, Ordering::Relaxed);
                 if let Some(metrics) = &worker_metrics {
                     metrics.encode.observe(started.elapsed());
                     if result.is_ok() {
@@ -180,8 +182,18 @@ impl GraphicsRenderer {
             kitty_id,
             is_tmux,
             metrics,
+            encode_latency_us,
             drawn: None,
+            startup_events,
         }
+    }
+
+    pub fn encode_latency(&self) -> Duration {
+        Duration::from_micros(self.encode_latency_us.load(Ordering::Relaxed))
+    }
+
+    pub fn take_startup_event(&mut self) -> Option<ratatui::crossterm::event::Event> {
+        self.startup_events.pop_front()
     }
 
     /// Clear the cached frame on media changes, fullscreen transitions and resizes.

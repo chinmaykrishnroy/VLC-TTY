@@ -106,6 +106,7 @@ impl Recorder {
         frame: Option<(u64, u64)>,
         draw_time: Duration,
         playback: &crate::vlc::PlaybackSnapshot,
+        audio: crate::vlc::AudioMetrics,
     ) -> io::Result<()> {
         self.draws += 1;
         self.draw.observe(draw_time);
@@ -119,11 +120,11 @@ impl Recorder {
             return Ok(());
         }
         let count = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
-        writeln!(self.file, "{{\"schema\":1,\"scope\":\"server only; not client presentation\",\"elapsed_ms\":{},\"vlc_callback_frames\":{},\"picture_allocations\":{},\"picture_allocated_bytes\":{},\"owned_frame_allocations\":{},\"copied_bytes\":{},\"copy_time_us\":{},\"encode_requests\":{},\"pending_replaced\":{},\"encoded_frames\":{},\"encode_failures\":{},\"responses_replaced\":{},\"stale_results\":{},\"encode_recent_p95_us\":{},\"queue_recent_p95_us\":{},\"draw_recent_p95_us\":{},\"backend_draws\":{},\"unique_frames_drawn\":{},\"backend_bytes\":{},\"playback_ms\":{},\"state\":{}}}",
+        writeln!(self.file, "{{\"schema\":1,\"scope\":\"server only; not client presentation\",\"elapsed_ms\":{},\"vlc_callback_frames\":{},\"picture_allocations\":{},\"picture_allocated_bytes\":{},\"owned_frame_allocations\":{},\"copied_bytes\":{},\"copy_time_us\":{},\"encode_requests\":{},\"pending_replaced\":{},\"encoded_frames\":{},\"encode_failures\":{},\"responses_replaced\":{},\"stale_results\":{},\"encode_recent_p95_us\":{},\"queue_recent_p95_us\":{},\"draw_recent_p95_us\":{},\"backend_draws\":{},\"unique_frames_drawn\":{},\"backend_bytes\":{},\"playback_ms\":{},\"state\":{},\"remote_audio\":{},\"audio_generation\":{},\"audio_callback_drops\":{},\"audio_queued_frames\":{},\"audio_underrun_callbacks\":{},\"audio_estimated_receiver_pts\":{}}}",
             self.started.elapsed().as_millis(), decode.frames, decode.picture_allocations, decode.picture_bytes,
             decode.owned_frames, decode.copied_bytes, decode.copy_us, count(&self.encoder.requests), count(&self.encoder.pending_replaced),
             count(&self.encoder.encoded), count(&self.encoder.failures), count(&self.encoder.responses_replaced), count(&self.encoder.stale),
-            self.encoder.encode.p95(), self.encoder.queue_wait.p95(), self.draw.p95(), self.draws, self.unique_frames, bytes, playback.time_ms, playback.state)?;
+            self.encoder.encode.p95(), self.encoder.queue_wait.p95(), self.draw.p95(), self.draws, self.unique_frames, bytes, playback.time_ms, playback.state, audio.remote, audio.generation, audio.callback_drops, audio.queued_frames, audio.underruns, audio.receiver_pts)?;
         self.file.flush()?;
         self.last_report = Instant::now();
         Ok(())

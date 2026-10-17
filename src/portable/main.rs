@@ -120,6 +120,12 @@ fn run() -> Result<u8> {
 }
 
 fn informational(args: &[OsString], flags: &[&str]) -> bool {
+    if args
+        .first()
+        .is_some_and(|arg| arg == "connect" || arg == "audio-receive")
+    {
+        return false;
+    }
     let mut value = false;
     for arg in args {
         if value {
@@ -143,6 +149,9 @@ fn informational(args: &[OsString], flags: &[&str]) -> bool {
             "--volume",
             "--rate",
             "--metrics",
+            "--audio-output",
+            "--audio-endpoint",
+            "--audio-token-file",
             "--extract-to",
         ]
         .iter()

@@ -3,11 +3,16 @@ pub fn print(portable: bool) {
     println!(
         "VLC-TTY {} — video inside your terminal\n\n\
 Usage: vlc-tty [OPTIONS] [FILE|FOLDER|URL]\n\n\
+       vlc-tty connect USER@HOST MEDIA [PLAYER OPTIONS]\n\
+       vlc-tty audio-receive --listen ADDRESS --token-file PATH\n\n\
   -h, --help            Show this help and exit\n\
   -V, --version         Show the application version\n\
   --ssh                 Silent SSH profile: 15 FPS, 720p callback cap\n\
   --silent              Disable audio and audio-device requirements\n\
   --audio               Play audio on the server/local machine\n\
+  --audio-output MODE   auto|local|remote|disabled (default: auto)\n\
+  --audio-endpoint ADDR Loopback receiver address for remote output\n\
+  --audio-token-file PATH Private session key for remote output\n\
   --graphics MODE       auto|kitty|sixel|iterm2|ansi (default: auto)\n\
   --fps N               Draw/encode limit, 1–120 (local default: 60)\n\
   --decode-height N     Callback cap, 0–4320; 0 uncapped (local: 1080)\n\
@@ -25,7 +30,8 @@ Usage: vlc-tty [OPTIONS] [FILE|FOLDER|URL]\n\n\
   --                    End options, including for paths starting with -\n\n\
 SSH sessions are detected automatically; explicit flags override defaults.\n\
 Allocate a terminal with ssh -t. Pixel graphics depend on your client terminal;\n\
-ANSI half-blocks are the fallback. SSH does not forward audio.\n\n\
+ANSI half-blocks are the fallback. Plain SSH does not forward audio.\n\
+The experimental connect helper forwards audio; use connect --help for details.\n\n\
 Keyboard: Space pause; s stop; f/F11 fullscreen; arrows seek; +/- volume;\n\
 m mute; [/] speed; = normal speed; e next frame; n/p next/previous;\n\
 z shuffle; Shift+R repeat off/all/one;\n\

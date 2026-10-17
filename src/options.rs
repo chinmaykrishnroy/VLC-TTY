@@ -1,4 +1,5 @@
 //! Resolve the SSH profile once at startup; explicit flags override profile defaults.
+use crate::audio::AudioOutput;
 use crate::graphics::GraphicsChoice;
 use crate::queue::RepeatMode;
 use anyhow::{bail, Context, Result};
@@ -18,7 +19,10 @@ pub struct Options {
     pub fps: u32,
     pub decode_height: u32,
     pub native_window: bool,
-    pub silent: bool,
+    pub audio_output: AudioOutput,
+    pub audio_endpoint: Option<String>,
+    pub audio_token_file: Option<String>,
+    pub direct_ssh_audio_warning: bool,
     pub ssh: bool,
     pub doctor: bool,
     pub smoke_test: bool,
@@ -46,7 +50,10 @@ impl Options {
             fps: 60,
             decode_height: 1080,
             native_window: false,
-            silent: false,
+            audio_output: AudioOutput::Auto,
+            audio_endpoint: None,
+            audio_token_file: None,
+            direct_ssh_audio_warning: false,
             ssh: remote,
             doctor: false,
             smoke_test: false,
@@ -56,7 +63,7 @@ impl Options {
         let mut args = args.into_iter();
         let mut fps = None;
         let mut decode = None;
-        let mut silent = None;
+        let mut audio = None;
         let mut positional = false;
         while let Some(arg) = args.next() {
             if positional {
@@ -99,8 +106,11 @@ impl Options {
                 "--doctor" => out.doctor = true,
                 "--smoke-test" => out.smoke_test = true,
                 "--ssh" => out.ssh = true,
-                "--silent" => silent = Some(true),
-                "--audio" => silent = Some(false),
+                "--silent" => audio = Some(AudioOutput::Disabled),
+                "--audio" => audio = Some(AudioOutput::Local),
+                "--audio-output" => audio = Some(value()?.parse()?),
+                "--audio-endpoint" => out.audio_endpoint = Some(value()?),
+                "--audio-token-file" => out.audio_token_file = Some(value()?),
                 "--native-window" => out.native_window = true,
                 "--shuffle" => out.shuffle = true,
                 "--metrics" => out.metrics = Some(value()?),
@@ -180,7 +190,31 @@ impl Options {
                 }
             },
         };
-        out.silent = silent.unwrap_or(out.ssh) || out.smoke_test;
+        let requested = audio.unwrap_or(AudioOutput::Auto);
+        out.direct_ssh_audio_warning = out.ssh && requested == AudioOutput::Auto;
+        out.audio_output = if out.smoke_test {
+            AudioOutput::Disabled
+        } else {
+            match requested {
+                AudioOutput::Auto => {
+                    if out.ssh {
+                        AudioOutput::Disabled
+                    } else {
+                        AudioOutput::Local
+                    }
+                }
+                mode => mode,
+            }
+        };
+        if out.audio_output == AudioOutput::Remote {
+            let endpoint = out.audio_endpoint.as_deref().context("Remote audio needs --audio-endpoint and an authenticated receiver; use vlc-tty connect")?;
+            crate::audio::transport::loopback(endpoint)?;
+            if out.audio_token_file.is_none() {
+                bail!("Remote audio needs --audio-token-file; use vlc-tty connect");
+            }
+        } else if out.audio_endpoint.is_some() || out.audio_token_file.is_some() {
+            bail!("Audio endpoint/session key require --audio-output remote");
+        }
         if !(1..=120).contains(&out.fps) {
             bail!("--fps must be between 1 and 120");
         }
@@ -212,7 +246,11 @@ mod tests {
     #[test]
     fn ssh_is_silent_and_bounded_by_default() {
         let options = parse(&[], true).unwrap();
-        assert!(options.silent && options.ssh);
+        assert!(
+            options.audio_output == AudioOutput::Disabled
+                && options.ssh
+                && options.direct_ssh_audio_warning
+        );
         assert_eq!((options.fps, options.decode_height), (15, 720));
     }
     #[test]
@@ -223,9 +261,48 @@ mod tests {
         ] {
             let options = parse(&args, false).unwrap();
             assert_eq!(
-                (options.fps, options.decode_height, options.silent),
-                (24, 0, false)
+                (options.fps, options.decode_height, options.audio_output),
+                (24, 0, AudioOutput::Local)
             );
+        }
+    }
+    #[test]
+    fn audio_modes_require_an_authenticated_loopback_receiver() {
+        let options = parse(
+            &[
+                "--ssh",
+                "--audio-output",
+                "remote",
+                "--audio-endpoint",
+                "127.0.0.1:47650",
+                "--audio-token-file",
+                "session.key",
+            ],
+            false,
+        )
+        .unwrap();
+        assert_eq!(options.audio_output, AudioOutput::Remote);
+        assert!(!options.direct_ssh_audio_warning);
+        assert_eq!(parse(&[], false).unwrap().audio_output, AudioOutput::Local);
+        assert!(
+            !parse(&["--ssh", "--silent"], false)
+                .unwrap()
+                .direct_ssh_audio_warning
+        );
+        for args in [
+            vec!["--audio-output", "remote"],
+            vec![
+                "--audio-output",
+                "remote",
+                "--audio-endpoint",
+                "0.0.0.0:47650",
+                "--audio-token-file",
+                "key",
+            ],
+            vec!["--audio-output", "invalid"],
+            vec!["--audio-endpoint", "127.0.0.1:1"],
+        ] {
+            assert!(parse(&args, false).is_err());
         }
     }
     #[test]
@@ -276,6 +353,6 @@ mod tests {
     fn paths_starting_with_dash_and_headless_smoke_are_supported() {
         let options = parse(&["--smoke-test", "--", "-movie.mp4"], false).unwrap();
         assert_eq!(options.media.as_deref(), Some("-movie.mp4"));
-        assert!(options.silent);
+        assert_eq!(options.audio_output, AudioOutput::Disabled);
     }
 }

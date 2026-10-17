@@ -408,13 +408,14 @@ fn video_content_area(area: Rect, captions: bool) -> Rect {
     }
 }
 
-fn fullscreen_content_area(area: Rect, captions: bool) -> Rect {
-    // Pixel images can cover terminal text. Keep the OSD rows outside their rectangle.
+fn fullscreen_content_area(area: Rect, captions: bool, osd: bool) -> Rect {
+    // Reserve space only for visible text: hidden overlays must not leave bands.
+    let top = if osd { area.height.min(2) } else { 0 };
     let content = Rect::new(
         area.x,
-        area.y.saturating_add(2),
+        area.y.saturating_add(top),
         area.width,
-        area.height.saturating_sub(2),
+        area.height.saturating_sub(top),
     );
     video_content_area(content, captions)
 }
@@ -846,9 +847,13 @@ pub fn draw(
             screen,
         );
 
-        // Reserve stable OSD and optional caption rows outside the pixel image.
+        // Use the complete terminal grid when neither OSD nor captions is visible.
         let video_area = screen;
-        let content_area = fullscreen_content_area(video_area, app.sidecar_enabled);
+        let content_area = fullscreen_content_area(
+            video_area,
+            app.subtitle_text(info.time_ms).is_some(),
+            app.show_osd(),
+        );
         zones.video = Some(video_area);
         // Back zone at top-left allows clicking to exit fullscreen
         zones.back = Some(Rect::new(screen.x, screen.y, 16.min(screen.width), 1));
@@ -1275,13 +1280,60 @@ mod tests {
     #[test]
     fn fullscreen_pixels_do_not_cover_osd_or_caption_rows() {
         let screen = Rect::new(0, 0, 80, 24);
-        let picture = fullscreen_content_area(screen, true);
+        let picture = fullscreen_content_area(screen, true, true);
         assert!(picture.y >= screen.y + 2);
         assert!(picture.bottom() <= screen.bottom() - 4);
         assert_eq!(picture.width, screen.width);
-        let small = fullscreen_content_area(Rect::new(0, 0, 24, 8), true);
+        let small = fullscreen_content_area(Rect::new(0, 0, 24, 8), true, true);
         assert!(small.height > 0);
         assert!(small.bottom() <= 8);
+    }
+    #[test]
+    fn fullscreen_without_visible_overlays_reaches_every_terminal_edge() {
+        use crate::graphics::{GraphicsChoice, GraphicsRenderer};
+        use ratatui::{backend::TestBackend, Terminal};
+        for (width, height) in [(80, 24), (101, 33), (24, 8)] {
+            let screen = Rect::new(0, 0, width, height);
+            assert_eq!(fullscreen_content_area(screen, false, false), screen);
+            let mut app = App::new(None);
+            app.toggle_fullscreen();
+            let image = VideoFrame {
+                width: width as usize,
+                height: height as usize * 2,
+                pitch: width as usize * 4,
+                bgra: [0, 0, 255, 255].repeat(width as usize * height as usize * 2),
+                serial: 1,
+            };
+            let info = PlaybackSnapshot {
+                time_ms: 0,
+                length_ms: 1000,
+                volume: 100,
+                state: 3,
+                rate: 1.0,
+                frames: 1,
+            };
+            let mut graphics = GraphicsRenderer::new(GraphicsChoice::Ansi, 15, None);
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|f| {
+                    draw(f, &app, &info, Some(&image), &mut graphics, false);
+                })
+                .unwrap();
+            for (x, y) in [
+                (0, 0),
+                (width - 1, 0),
+                (0, height - 1),
+                (width - 1, height - 1),
+            ] {
+                let cell = &terminal.backend().buffer()[(x, y)];
+                assert_eq!(
+                    cell.symbol(),
+                    "▀",
+                    "unused edge at {x},{y} in {width}x{height}"
+                );
+                assert_eq!(cell.fg, Color::Rgb(255, 0, 0));
+            }
+        }
     }
     #[test]
     fn normal_layout_has_click_targets() {

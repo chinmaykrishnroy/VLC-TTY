@@ -232,6 +232,10 @@ pub struct MediaTrack {
 }
 
 // Simple C signatures from the LibVLC 3.x public ABI.
+type AudioPlay = unsafe extern "C" fn(*mut c_void, *const c_void, u32, i64);
+type AudioEvent = unsafe extern "C" fn(*mut c_void, i64);
+type AudioDrain = unsafe extern "C" fn(*mut c_void);
+
 struct Api {
     _library: Library,
     // Declared after libvlc so its dependency stays loaded until libvlc is dropped.
@@ -254,6 +258,17 @@ struct Api {
     player_get_time: unsafe extern "C" fn(*mut c_void) -> i64,
     player_get_length: unsafe extern "C" fn(*mut c_void) -> i64,
     player_set_time: unsafe extern "C" fn(*mut c_void, i64),
+    clock: unsafe extern "C" fn() -> i64,
+    audio_set_callbacks: unsafe extern "C" fn(
+        *mut c_void,
+        Option<AudioPlay>,
+        Option<AudioEvent>,
+        Option<AudioEvent>,
+        Option<AudioEvent>,
+        Option<AudioDrain>,
+        *mut c_void,
+    ),
+    audio_set_format: unsafe extern "C" fn(*mut c_void, *const c_char, u32, u32),
     audio_get_volume: unsafe extern "C" fn(*mut c_void) -> c_int,
     audio_set_volume: unsafe extern "C" fn(*mut c_void, c_int) -> c_int,
     audio_set_delay: unsafe extern "C" fn(*mut c_void, i64) -> c_int,
@@ -370,6 +385,9 @@ impl Api {
             player_get_time: f!("libvlc_media_player_get_time"),
             player_get_length: f!("libvlc_media_player_get_length"),
             player_set_time: f!("libvlc_media_player_set_time"),
+            clock: f!("libvlc_clock"),
+            audio_set_callbacks: f!("libvlc_audio_set_callbacks"),
+            audio_set_format: f!("libvlc_audio_set_format"),
             audio_get_volume: f!("libvlc_audio_get_volume"),
             audio_set_volume: f!("libvlc_audio_set_volume"),
             audio_set_delay: f!("libvlc_audio_set_delay"),
@@ -521,8 +539,18 @@ pub struct VlcPlayer {
     context: Box<CallbackContext>,
     rate: f32,
     native_window: bool,
+    audio_transport: Option<crate::audio::transport::Transport>,
 }
 
+#[derive(Default)]
+pub struct AudioMetrics {
+    pub remote: bool,
+    pub generation: u64,
+    pub callback_drops: u64,
+    pub queued_frames: u64,
+    pub underruns: u64,
+    pub receiver_pts: i64,
+}
 #[derive(Default)]
 pub struct DecodeMetrics {
     pub frames: u64,
@@ -548,6 +576,76 @@ fn clean_path_for_vlc(path: &Path) -> Result<String> {
 }
 
 impl VlcPlayer {
+    pub fn forward_audio(&mut self, endpoint: &str, key: &[u8; 32]) -> Result<()> {
+        if self.audio_transport.is_some() || !matches!(self.snapshot().state, 0 | 5 | 6) {
+            bail!("Configure remote audio once, before opening media");
+        }
+        use crate::audio::{capture, protocol, transport};
+        let transport =
+            transport::Transport::connect(transport::loopback(endpoint)?, key, self.api.clock)?;
+        unsafe {
+            (self.api.audio_set_format)(
+                self.player,
+                c"S16N".as_ptr(),
+                protocol::RATE,
+                protocol::CHANNELS as u32,
+            );
+            (self.api.audio_set_callbacks)(
+                self.player,
+                Some(capture::play),
+                Some(capture::pause),
+                Some(capture::resume),
+                Some(capture::flush),
+                Some(capture::drain),
+                Arc::as_ptr(&transport.capture).cast_mut().cast(),
+            );
+        }
+        self.audio_transport = Some(transport);
+        Ok(())
+    }
+    pub fn audio_metrics(&self) -> AudioMetrics {
+        self.audio_transport
+            .as_ref()
+            .map_or_else(AudioMetrics::default, |t| AudioMetrics {
+                remote: true,
+                generation: t.capture.generation.load(Ordering::Acquire),
+                callback_drops: t.capture.dropped.load(Ordering::Relaxed),
+                queued_frames: t.queued_frames.load(Ordering::Relaxed),
+                underruns: t.underruns.load(Ordering::Relaxed),
+                receiver_pts: t.presented_pts.load(Ordering::Relaxed),
+            })
+    }
+    pub fn audio_status(&self) -> Option<(bool, u64, u64)> {
+        self.audio_transport.as_ref().map(|t| {
+            (
+                t.failed.load(Ordering::Acquire),
+                t.queued_frames.load(Ordering::Relaxed),
+                t.underruns.load(Ordering::Relaxed),
+            )
+        })
+    }
+    pub fn audio_delay_state(&self) -> Option<(u64, bool, std::time::Duration)> {
+        self.audio_transport.as_ref().map(|t| {
+            let pts = t.presented_pts.load(Ordering::Relaxed);
+            let lag = if pts > 0 {
+                unsafe { (self.api.clock)() }
+                    .saturating_sub(pts)
+                    .clamp(0, 250_000)
+            } else {
+                100_000
+            };
+            (
+                t.capture.generation.load(Ordering::Acquire),
+                t.capture.paused.load(Ordering::Acquire),
+                std::time::Duration::from_micros(lag as u64),
+            )
+        })
+    }
+    fn invalidate_audio(&self) {
+        if let Some(transport) = &self.audio_transport {
+            transport.capture.flush();
+        }
+    }
     pub fn library_path(&self) -> &Path {
         &self.api.loaded_from
     }
@@ -616,6 +714,7 @@ impl VlcPlayer {
             context,
             rate: 1.0,
             native_window,
+            audio_transport: None,
         })
     }
 
@@ -631,6 +730,7 @@ impl VlcPlayer {
     }
 
     pub fn open(&mut self, locator: &str) -> Result<()> {
+        self.invalidate_audio();
         let is_url = locator.contains("://");
         let text = if is_url {
             locator.to_owned()
@@ -640,6 +740,11 @@ impl VlcPlayer {
         let c = CString::new(text.clone()).map_err(|_| anyhow!("path contains a NUL byte"))?;
         unsafe {
             (self.api.player_stop)(self.player);
+            if let Some(transport) = &self.audio_transport {
+                transport.capture.last_pts.store(0, Ordering::Relaxed);
+                transport.capture.draining.store(false, Ordering::Release);
+                transport.capture.state(false);
+            }
             *self
                 .context
                 .frames
@@ -671,11 +776,15 @@ impl VlcPlayer {
             } else if s == 4 {
                 (self.api.player_set_pause)(self.player, 0);
             } else {
+                if let Some(transport) = &self.audio_transport {
+                    transport.capture.state(false);
+                }
                 (self.api.player_play)(self.player);
             }
         }
     }
     pub fn seek_relative(&mut self, delta_ms: i64) {
+        self.invalidate_audio();
         unsafe {
             let current = (self.api.player_get_time)(self.player);
             let length = (self.api.player_get_length)(self.player);
@@ -711,6 +820,7 @@ impl VlcPlayer {
         self.rate
     }
     pub fn set_rate(&mut self, value: f32) {
+        self.invalidate_audio();
         if unsafe { (self.api.player_set_rate)(self.player, value) } == 0 {
             self.rate = value;
         }
@@ -759,6 +869,7 @@ impl VlcPlayer {
         unsafe { (self.api.audio_get_track)(self.player) }
     }
     pub fn select_audio(&mut self, id: i32) -> bool {
+        self.invalidate_audio();
         unsafe { (self.api.audio_set_track)(self.player, id) == 0 }
     }
     pub fn load_vlc_subtitle(&mut self, path: &Path) -> Result<()> {
@@ -773,6 +884,7 @@ impl VlcPlayer {
         Ok(())
     }
     pub fn seek_to(&mut self, ms: i64) {
+        self.invalidate_audio();
         let length = unsafe { (self.api.player_get_length)(self.player) };
         let value = if length > 0 {
             ms.clamp(0, length)
@@ -786,6 +898,9 @@ impl VlcPlayer {
     pub fn stop(&mut self) {
         unsafe {
             (self.api.player_stop)(self.player);
+        }
+        if let Some(transport) = &self.audio_transport {
+            transport.capture.state(true);
         }
         *self
             .context
@@ -827,7 +942,23 @@ impl VlcPlayer {
                 time_ms: (self.api.player_get_time)(self.player),
                 length_ms: (self.api.player_get_length)(self.player),
                 volume: (self.api.audio_get_volume)(self.player),
-                state: (self.api.player_get_state)(self.player),
+                state: {
+                    let state = (self.api.player_get_state)(self.player);
+                    if state == 6
+                        && self.audio_transport.as_ref().is_some_and(|t| {
+                            t.capture.draining.load(Ordering::Acquire)
+                                && t.capture
+                                    .last_pts
+                                    .load(Ordering::Relaxed)
+                                    .saturating_add(150_000)
+                                    > (self.api.clock)()
+                        })
+                    {
+                        3
+                    } else {
+                        state
+                    }
+                },
                 rate: self.rate,
                 frames: self.context.frames.presented.load(Ordering::Relaxed),
             }
@@ -842,6 +973,7 @@ impl Drop for VlcPlayer {
             (self.api.player_release)(self.player);
             (self.api.release)(self.instance);
         }
+        drop(self.audio_transport.take());
         // `context` and then the dynamic library are dropped afterward.
     }
 }
@@ -929,6 +1061,116 @@ mod tests {
             "No decoded progress before timeout: {:?}",
             player.snapshot()
         );
+    }
+
+    #[test]
+    #[ignore = "requires installed LibVLC 3; run with --ignored --test-threads=1"]
+    fn real_pcm_callbacks_forward_audio_and_invalidate_after_seek() {
+        use crate::audio::protocol::{self, Message};
+        use std::{
+            io::Write,
+            net::TcpListener,
+            time::{Duration, Instant},
+        };
+        // Generate a deterministic non-silent WAV without depending on FFmpeg or
+        // a local sound device. The authenticated receiver verifies actual PCM.
+        let mut fixture = tempfile::Builder::new().suffix(".wav").tempfile().unwrap();
+        let bytes = 48_000u32 * 4 * 8;
+        fixture.write_all(b"RIFF").unwrap();
+        fixture.write_all(&(36 + bytes).to_le_bytes()).unwrap();
+        fixture
+            .write_all(b"WAVEfmt \x10\0\0\0\x01\0\x02\0")
+            .unwrap();
+        fixture.write_all(&48_000u32.to_le_bytes()).unwrap();
+        fixture.write_all(&192_000u32.to_le_bytes()).unwrap();
+        fixture.write_all(b"\x04\0\x10\0data").unwrap();
+        fixture.write_all(&bytes.to_le_bytes()).unwrap();
+        for index in 0..48_000 * 8 {
+            let sample = if index % 96 < 48 { 5000i16 } else { -5000i16 };
+            fixture.write_all(&sample.to_le_bytes()).unwrap();
+            fixture.write_all(&sample.to_le_bytes()).unwrap();
+        }
+        fixture.flush().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let key = [42u8; 32];
+        let packets = Arc::new(AtomicU64::new(0));
+        let nonzero = Arc::new(AtomicU64::new(0));
+        let generation = Arc::new(AtomicU64::new(0));
+        let (p, n, g) = (packets.clone(), nonzero.clone(), generation.clone());
+        let receiver = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(10)))
+                .unwrap();
+            protocol::authenticate_server(&mut stream, &key).unwrap();
+            assert_eq!(protocol::read(&mut stream).unwrap(), Message::Format);
+            let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let d = done.clone();
+            let feedback_generation = g.clone();
+            let mut feedback = stream.try_clone().unwrap();
+            let heartbeat = std::thread::spawn(move || {
+                while !d.load(Ordering::Acquire) {
+                    if protocol::write(
+                        &mut feedback,
+                        &Message::Telemetry {
+                            generation: feedback_generation.load(Ordering::Acquire),
+                            queued_frames: 100,
+                            underruns: 0,
+                            pts: 0,
+                        },
+                    )
+                    .is_err()
+                    {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            });
+            while let Ok(message) = protocol::read(&mut stream) {
+                match message {
+                    Message::Samples {
+                        generation, data, ..
+                    } => {
+                        assert!(generation >= g.load(Ordering::Acquire));
+                        p.fetch_add(1, Ordering::Relaxed);
+                        if data.iter().any(|s| *s != 0) {
+                            n.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                    Message::State { generation, .. } => {
+                        g.store(generation, Ordering::Release);
+                    }
+                    Message::End => break,
+                    _ => panic!("Unexpected message"),
+                }
+            }
+            done.store(true, Ordering::Release);
+            let _ = heartbeat.join();
+        });
+        let mut player = VlcPlayer::configured(false, false, 90).unwrap();
+        player.forward_audio(&address.to_string(), &key).unwrap();
+        player.open(fixture.path().to_str().unwrap()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while packets.load(Ordering::Relaxed) < 3 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            packets.load(Ordering::Relaxed) >= 3,
+            "No decoded PCM received"
+        );
+        assert!(nonzero.load(Ordering::Relaxed) > 0);
+        let before = generation.load(Ordering::Acquire);
+        player.seek_to(3000);
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while generation.load(Ordering::Acquire) <= before && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(generation.load(Ordering::Acquire) > before);
+        assert!(!player.audio_status().unwrap().0);
+        player.stop();
+        drop(player);
+        receiver.join().unwrap();
     }
 
     #[test]

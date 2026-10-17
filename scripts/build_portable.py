@@ -37,7 +37,15 @@ def build(target, runtime_home=None, with_sources=False):
         payload = temporary / "payload"
         payload.mkdir()
         shutil.move(next(unpacked.iterdir()), payload / "app")
-        runtime = collect(payload / "runtime", target, runtime_home or os.environ.get("VLC_HOME", ""))
+        previous_application = os.environ.get("VLC_TTY_COLLECT_APPLICATION")
+        os.environ["VLC_TTY_COLLECT_APPLICATION"] = str(binary)
+        try:
+            runtime = collect(payload / "runtime", target, runtime_home or os.environ.get("VLC_HOME", ""))
+        finally:
+            if previous_application is None:
+                os.environ.pop("VLC_TTY_COLLECT_APPLICATION", None)
+            else:
+                os.environ["VLC_TTY_COLLECT_APPLICATION"] = previous_application
         if with_sources and "linux" in target:
             runtime["source_companion"] = linux_sources(runtime["packages"], out / f"vlc-tty-{version}-{LABELS[target]}-runtime-sources.tar.gz")
         elif with_sources:

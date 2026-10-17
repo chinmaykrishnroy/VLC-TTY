@@ -1,4 +1,5 @@
 mod app;
+mod audio;
 mod dialogs;
 mod graphics;
 mod help;
@@ -10,8 +11,10 @@ mod playback;
 mod playlist;
 mod profiling;
 mod queue;
+mod remote;
 mod renderer;
 mod subtitles;
+mod terminal_probe;
 mod termination;
 mod vlc;
 
@@ -164,6 +167,9 @@ fn main() -> Result<()> {
 }
 
 fn run() -> Result<()> {
+    if remote::dispatch()? {
+        return Ok(());
+    }
     let termination = termination::Termination::install()?;
     let remote =
         std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
@@ -192,12 +198,16 @@ fn run() -> Result<()> {
         return Ok(());
     }
     if opts.doctor {
-        println!("VLC-TTY {} diagnostics\nOS: {} / {}\nSSH profile: {}\nAudio: {}\nFPS limit: {}\nDecode height: {}\nTTY stdin/stdout: {}/{}",
+        println!("VLC-TTY {} diagnostics\nOS: {} / {}\nSSH profile: {}\nAudio: {:?}\nFPS limit: {}\nDecode height: {}\nTTY stdin/stdout: {}/{}",
             env!("CARGO_PKG_VERSION"), std::env::consts::OS, std::env::consts::ARCH, opts.ssh,
-            if opts.silent { "disabled" } else { "server/local device (not SSH forwarding)" }, opts.fps, opts.decode_height,
+            opts.audio_output, opts.fps, opts.decode_height,
             io::stdin().is_terminal(), io::stdout().is_terminal());
-        let player = VlcPlayer::configured(false, opts.silent, opts.decode_height)
-            .context("LibVLC 3.x unavailable: install its matching libraries and plugins")?;
+        let player = VlcPlayer::configured(
+            false,
+            opts.audio_output == audio::AudioOutput::Disabled,
+            opts.decode_height,
+        )
+        .context("LibVLC 3.x unavailable: install its matching libraries and plugins")?;
         println!(
             "LibVLC {} loaded: {}",
             player.library_version(),
@@ -227,8 +237,30 @@ fn run() -> Result<()> {
         .map(|path| profiling::Recorder::create(Path::new(path)))
         .transpose()
         .context("Could not create profiling file; choose a new writable path")?;
-    let mut player = VlcPlayer::configured(opts.native_window, opts.silent, opts.decode_height)
-        .context("Could not load LibVLC 3.x; run vlc-tty --doctor")?;
+    if opts.direct_ssh_audio_warning {
+        eprintln!("SSH audio is disabled. To hear sound locally, launch `vlc-tty connect HOST MEDIA` on your computer. Use --silent to select silence, or --audio-output local for the server's speakers.");
+    }
+    let mut player = VlcPlayer::configured(
+        opts.native_window,
+        opts.audio_output == audio::AudioOutput::Disabled,
+        opts.decode_height,
+    )
+    .context("Could not load LibVLC 3.x; run vlc-tty --doctor")?;
+    if opts.audio_output == audio::AudioOutput::Remote {
+        let text = std::fs::read_to_string(
+            opts.audio_token_file
+                .as_deref()
+                .context("Missing audio session key file")?,
+        )
+        .context("Cannot read private audio session key")?;
+        let key = audio::transport::token(&text)?;
+        player.forward_audio(
+            opts.audio_endpoint
+                .as_deref()
+                .context("Missing audio endpoint")?,
+            &key,
+        )?;
+    }
     player.enable_profiling(recorder.is_some());
     if opts.smoke_test {
         return smoke_test(
@@ -274,6 +306,9 @@ fn run() -> Result<()> {
             graphics.detected_label()
         ));
     }
+    if opts.direct_ssh_audio_warning {
+        app.notify("SSH audio disabled: use vlc-tty connect on your local computer");
+    }
     let mut zones = HitZones::default();
     let mut previous_presentation = (
         app.fullscreen,
@@ -282,15 +317,27 @@ fn run() -> Result<()> {
         app.active_menu,
         app.input.is_some(),
         app.sidecar_enabled,
+        app.fullscreen && app.show_osd(),
+        app.fullscreen && app.subtitle_text(player.snapshot().time_ms).is_some(),
     );
+    let mut video_delay = audio::sync::VideoDelay::new();
     let mut last_draw = Instant::now() - Duration::from_secs(1);
     let interval = Duration::from_millis((1000 / opts.fps.max(1)) as u64);
     loop {
+        if player.audio_status().is_some_and(|(failed, _, _)| failed) {
+            bail!(
+                "Remote audio connection failed; playback stopped. Reconnect with vlc-tty connect."
+            );
+        }
         if termination.requested() {
             return Ok(());
         }
-        if event::poll(Duration::from_millis(4))? {
-            let first = event::read()?;
+        let startup_event = graphics.take_startup_event();
+        if startup_event.is_some() || event::poll(Duration::from_millis(4))? {
+            let first = match startup_event {
+                Some(event) => event,
+                None => event::read()?,
+            };
             let batch_text = matches!(&first, Event::Key(k) if k.kind == KeyEventKind::Press
                 && matches!(k.code, KeyCode::Char(_))
                 && !k.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT))
@@ -341,17 +388,27 @@ fn run() -> Result<()> {
             app.active_menu,
             app.input.is_some(),
             app.sidecar_enabled,
+            app.fullscreen && app.show_osd(),
+            app.fullscreen && app.subtitle_text(player.snapshot().time_ms).is_some(),
         );
         if previous_presentation != presentation {
             reset_fullscreen(&mut terminal)?;
             graphics.invalidate();
             previous_presentation = presentation;
         }
-        let frame = if opts.native_window {
+        let mut frame = if opts.native_window {
             None
         } else {
             player.latest_frame().or_else(|| app.audio_thumbnail())
         };
+        if let Some((generation, paused, delay)) = player.audio_delay_state() {
+            frame = video_delay.select(
+                frame,
+                generation,
+                paused,
+                delay.saturating_sub(graphics.encode_latency()),
+            );
+        }
         if !opts.native_window
             && app.overlay == app::Overlay::None
             && app.active_menu.is_none()
@@ -382,6 +439,7 @@ fn run() -> Result<()> {
                     drawn,
                     draw_started.elapsed(),
                     &info,
+                    player.audio_metrics(),
                 )?;
             }
             last_draw = Instant::now();

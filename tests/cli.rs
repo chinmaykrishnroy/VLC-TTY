@@ -57,3 +57,14 @@ fn missing_media_is_reported_before_terminal_or_backend_startup() {
         String::from_utf8_lossy(&result.stderr)
     );
 }
+
+#[test]
+fn audio_command_help_does_not_need_a_runtime_or_sound_device() {
+    for command in ["connect", "audio-receive"] {
+        let result = player().args([command, "--help"]).output().unwrap();
+        assert!(result.status.success());
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains(&format!("Usage: vlc-tty {command}"))
+        );
+    }
+}

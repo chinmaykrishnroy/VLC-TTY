@@ -194,6 +194,10 @@ def benchmark(args):
             if not valid:
                 raise RuntimeError("Benchmark acceptance failed; inspect summary.json")
             return summary
+    except BaseException as error:
+        if not (output / "summary.json").exists():
+            (output / "summary.json").write_text(json.dumps(dict(metadata, passed=False, error=str(error), last_application_sample=latest), indent=2) + "\n")
+        raise
     finally:
         if process.poll() is None:
             os.killpg(process.pid, signal.SIGTERM)

@@ -11,6 +11,8 @@ cargo clippy --locked --all-targets -- -D warnings
 
 The executable is `target/release/vlc-tty` or `target/release/vlc-tty.exe`. The application loads **LibVLC 3.x** dynamically when run. Install matching CPU-architecture libraries, core and plugins. LibVLC 4 is not supported by this adapter.
 
+Default builds include the CPAL client receiver. On Ubuntu/Debian install `libasound2-dev` before building. For a headless server without local output support use `cargo build --locked --release --no-default-features --bin vlc-tty`; remote PCM capture still works. See [remote audio development](docs/REMOTE-AUDIO.md).
+
 ## Runtime
 
 - Ubuntu/Debian: `sudo apt-get install --no-install-recommends libvlc5 vlc-plugin-base`.

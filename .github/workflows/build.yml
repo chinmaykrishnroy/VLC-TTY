@@ -49,6 +49,9 @@ jobs:
           key: ${{ matrix.target }}
       - name: Format
         run: cargo fmt --all -- --check
+      - name: Linux audio client build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev
       - name: Unit regressions
         run: cargo test --locked --all-targets
       - name: Strict Clippy
@@ -98,6 +101,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Runtime without a desktop
         run: python3 scripts/ci_install_vlc.py aarch64-unknown-linux-gnu
+      - name: Keep headless builds independent of local audio devices
+        run: cargo check --locked --no-default-features --all-targets
+      - name: Audio client build dependencies
+        run: sudo apt-get install -y --no-install-recommends libasound2-dev
       - name: Decode without display or sound device
         run: |
           unset DISPLAY WAYLAND_DISPLAY
@@ -105,6 +112,10 @@ jobs:
           cargo run --locked -- --ssh --smoke-test samples/sample.mp4
       - name: Exercise real terminal controls without cursor-report replies
         run: python3 scripts/pty_smoke.py target/debug/vlc-tty samples/sample.mp4 --expect-caption TermVLC
+      - name: Forced pixel protocols must retain keyboard input after probe timeout
+        run: |
+          python3 scripts/benchmark_playback.py target/debug/vlc-tty samples/sample.mp4 --renderer kitty --duration 12 --output target/benchmark-kitty
+          python3 scripts/benchmark_playback.py target/debug/vlc-tty samples/sample.mp4 --renderer sixel --duration 12 --output target/benchmark-sixel
 
   runtime-sources:
     name: Preserve VLC and contributed dependency sources
