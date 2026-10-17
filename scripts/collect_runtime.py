@@ -91,10 +91,28 @@ def collect(destination, target, runtime_home):
     if "linux" in target:
         return collect_linux(destination)
     runtime_home = Path(runtime_home)
+    generated = {}
     if "windows" in target:
         if not (runtime_home / "libvlc.dll").is_file():
             raise RuntimeError("Expected a complete Windows VLC runtime")
         shutil.copytree(runtime_home, destination, symlinks=True)
+        # Official ZIPs can omit the native plugin index. Scanning hundreds of
+        # DLLs on every private extraction can take minutes on real desktops.
+        # Build the relocatable index with the matching vendor tool, leaving the
+        # input archive/runtime and every shipped DLL untouched.
+        generator = (destination / "vlc-cache-gen.exe").resolve()
+        plugins = (destination / "plugins").resolve()
+        cache = plugins / "plugins.dat"
+        cache.unlink(missing_ok=True)
+        env = dict(os.environ)
+        env["PATH"] = str(destination.resolve()) + os.pathsep + env.get("PATH", "")
+        env["VLC_PLUGIN_PATH"] = str(plugins)
+        subprocess.run([str(generator), str(plugins)], cwd=destination.resolve(), env=env,
+                       stdin=subprocess.DEVNULL, check=True, timeout=180)
+        if not cache.is_file() or cache.stat().st_size == 0:
+            raise RuntimeError("VLC plugin index generation did not produce plugins.dat")
+        generated["plugin_cache"] = {"file": "plugins/plugins.dat", "sha256": digest(cache),
+                                      "generator": "vlc-cache-gen.exe", "generator_sha256": digest(generator)}
     else:
         if not (runtime_home / "Contents/MacOS/lib/libvlc.dylib").is_file():
             raise RuntimeError("Expected a complete VLC 3 macOS app bundle")
@@ -104,6 +122,6 @@ def collect(destination, target, runtime_home):
     marker = runtime_home / ".vlc-tty-origin.json"
     origin = json.loads(marker.read_text()) if marker.is_file() else {}
     verified = origin == {"target": target, "url": spec["url"], "sha256": spec["sha256"]}
-    return {"origin": spec["url"] if verified else "local runtime directory (upstream archive identity unverified)",
+    return {**generated, "origin": spec["url"] if verified else "local runtime directory (upstream archive identity unverified)",
             "upstream_sha256": spec["sha256"] if verified else None, "archive_verified": verified,
             "source_correspondence": {"verified": False, "reason": "Contrib source superset does not yet establish exact upstream binary-to-source build correspondence"}}
