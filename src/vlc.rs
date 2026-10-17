@@ -207,6 +207,8 @@ pub struct MediaTrack {
 // Simple C signatures from the LibVLC 3.x public ABI.
 struct Api {
     _library: Library,
+    // Declared after libvlc so its dependency stays loaded until libvlc is dropped.
+    _core_library: Option<Library>,
     loaded_from: PathBuf,
     version: String,
     new: unsafe extern "C" fn(c_int, *const *const c_char) -> *mut c_void,
@@ -260,6 +262,13 @@ impl Api {
     fn load() -> Result<Self> {
         let mut failures = Vec::new();
         for name in libvlc_candidates() {
+            let core = match preload_core(&name) {
+                Ok(core) => core,
+                Err(error) => {
+                    failures.push(format!("{}: core dependency: {error:#}", name.display()));
+                    continue;
+                }
+            };
             // Loading libvlc.dll also needs libvlccore.dll and the VLC plugin
             // directory; normal VLC installation doesn't modify PATH on Windows.
             #[cfg(windows)]
@@ -272,7 +281,7 @@ impl Api {
                 env::set_var("PATH", joined);
             }
             match unsafe { Library::new(&name) } {
-                Ok(lib) => match unsafe { Self::symbols(lib, name.clone()) } {
+                Ok(lib) => match unsafe { Self::symbols(lib, name.clone(), core) } {
                     Ok(api) => return Ok(api),
                     Err(e) => {
                         failures.push(format!("{}: incompatible library: {e:#}", name.display()))
@@ -300,7 +309,7 @@ impl Api {
         }
     }
 
-    unsafe fn symbols(lib: Library, loaded_from: PathBuf) -> Result<Self> {
+    unsafe fn symbols(lib: Library, loaded_from: PathBuf, core: Option<Library>) -> Result<Self> {
         let get_version =
             lib.get::<unsafe extern "C" fn() -> *const c_char>(b"libvlc_get_version\0")?;
         let version_ptr = get_version();
@@ -355,10 +364,29 @@ impl Api {
             video_set_format_callbacks: f!("libvlc_video_set_format_callbacks"),
             errmsg: f!("libvlc_errmsg"),
             _library: lib,
+            _core_library: core,
             loaded_from,
             version,
         })
     }
+}
+
+fn preload_core(libvlc_path: &Path) -> Result<Option<Library>> {
+    // VLC.app references @rpath/libvlccore.dylib. An external executable has no
+    // VLC.app rpath; load the sibling first, as VideoLAN's Python binding does.
+    // Keep the handle in Api rather than relying on a process-wide leaked handle.
+    #[cfg(target_os = "macos")]
+    if let Some(parent) = libvlc_path.parent() {
+        let core = parent.join("libvlccore.dylib");
+        if core.is_file() {
+            return unsafe { Library::new(&core) }
+                .with_context(|| format!("Could not preload {}", core.display()))
+                .map(Some);
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = libvlc_path;
+    Ok(None)
 }
 
 fn library_name() -> &'static str {
@@ -808,7 +836,8 @@ mod tests {
                 &mut lines,
             );
             assert_eq!(count, 1);
-            assert_eq!(chroma.map(|x| x as u8), *b"RV32");
+            // c_char is unsigned on Linux ARM64 and signed on several other targets.
+            assert_eq!(chroma.map(i32::from), b"RV32".map(i32::from));
             assert!(pitch >= w * 4);
             let mut plane: *mut c_void = ptr::null_mut();
             let picture = lock_video(opaque, &mut plane);

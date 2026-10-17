@@ -831,7 +831,7 @@ pub fn draw(
         app.active_menu.is_some() || app.overlay != Overlay::None || app.input.is_some();
 
     if app.fullscreen {
-        // ── Fullscreen: 100% Edge-to-edge pure video without persistent text bars ──
+        // Fullscreen layout keeps controls/captions outside the pixel image.
         f.render_widget(
             Block::default().style(Style::default().bg(Color::Black)),
             screen,
@@ -883,7 +883,7 @@ pub fn draw(
         subtitle(f, app, info, video_area);
 
         // Floating OSD: only renders momentarily when user performs an action (e.g. presses 't', volume, seek)
-        // Floats unobtrusively in top-right corner over the video and auto-disappears after 2 seconds.
+        // Uses the reserved top rows and disappears after 2 seconds.
         if app.show_osd() {
             let label = if app.status_visible() {
                 format!(" {} ", app.status)

@@ -352,12 +352,9 @@ fn encode_pixels(
     result.map_err(|error| error.to_string())
 }
 
-/// Direct high-speed Sixel encoder bypassing ratatui-image's multi-step overhead.
-/// - Downsamples directly from the frame's BGRA into target-sized RGBA (sub-millisecond).
-/// - Quantizes with Wu's algorithm without error diffusion dithering (diffusion=0.0):
-///   eliminates mosquito dithering noise in video, speeds up quantization by 10x, and
-///   maximizes Sixel run-length compression, dropping payload size from ~300KB to ~40KB.
-/// - Never prepends clear_area ECH sequences, completely preventing frame blinking.
+/// Direct Sixel encoding with nearest-neighbor BGRA scaling and Wu quantization.
+/// Disable diffusion dithering and omit the static-image ECH erase prefix to
+/// reduce encoding work and avoid clearing the rectangle before each video frame.
 fn encode_sixel_fast(
     frame: &VideoFrame,
     area: Size,
