@@ -18,3 +18,11 @@ Use the terminal's fullscreen action to hide window chrome. `f`/F11 inside VLC-T
 Black bars beside square artwork or a video with a different aspect ratio are intentional: the image is fitted without cropping or stretching. They are separate from the outer terminal border.
 
 Reference: [Microsoft Windows Terminal profile appearance](https://learn.microsoft.com/windows/terminal/customize-settings/profile-appearance).
+
+## Album artwork and pixel graphics
+
+Automatic mode queries the active terminal for image support. Recent Windows Terminal versions advertise Sixel, so audio covers and video use pixel graphics; the footer should say **Sixel pixel graphics**. Unsupported terminals still use **ANSI half-block fallback**. A startup probe times out after 750 ms without leaving a background reader or changing console input mode.
+
+If you know your terminal supports Sixel but its capability replies are blocked, launch with `--graphics sixel`. Press `g` to toggle between the selected pixel renderer and ANSI. Sixel uses a colour palette and is much sharper than character-cell artwork; it is not a 24-bit image protocol.
+
+The Windows CI smoke test drops a generated audio file with cover art into a real ConPTY session and requires Sixel output. It also tests negative capability replies, unanswered queries, early keyboard input and normal exit. Its checksum-pinned Microsoft ConPTY test runtime is downloaded only for testing and is not bundled with VLC-TTY.

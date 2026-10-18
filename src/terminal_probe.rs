@@ -144,7 +144,14 @@ fn query_bytes() -> Vec<u8> {
     }
     bytes
 }
-#[cfg(not(unix))]
+#[cfg(windows)]
+#[path = "terminal_probe_windows.rs"]
+mod windows;
+#[cfg(windows)]
+fn query_bytes() -> Vec<u8> {
+    windows::query_bytes()
+}
+#[cfg(not(any(unix, windows)))]
 fn query_bytes() -> Vec<u8> {
     Vec::new()
 }

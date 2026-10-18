@@ -2,6 +2,7 @@
 
 ## 0.0.1 (first public version, in development)
 
+- Restore Windows automatic pixel-graphics detection for dropped audio artwork and video with a bounded native console probe; preserve early shortcuts and keep ANSI fallback for unsupported terminals.
 - Stream original remote file bytes over SSH into local LibVLC with byte-range seeking; no remote player or transcoding required.
 - Make forwarded PCM volume explicit and test actual muted/restored samples against LibVLC, rather than relying on the custom output's native volume readout.
 - Add uninterrupted audio continuity checks that fail on steady receiver gaps, separately from interaction smoke tests.

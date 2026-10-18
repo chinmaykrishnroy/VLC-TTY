@@ -62,6 +62,19 @@ jobs:
         run: python scripts/ci_install_vlc.py ${{ matrix.target }}
       - name: Require real file and HTTP decoding, controls and silent mode
         run: cargo test --locked --all-targets -- --ignored --test-threads=1 --nocapture
+      - name: Windows automatic graphics, dropped audio artwork and probe input
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $player = 'target/${{ matrix.target }}/debug/vlc-tty.exe'
+          python scripts/windows_graphics_smoke.py $player --host-directory target/graphics-test-host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/windows_graphics_smoke.py $player --mode no-sixel --host-directory target/graphics-test-host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/windows_graphics_smoke.py $player --mode timeout --host-directory target/graphics-test-host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/windows_graphics_smoke.py $player --mode no-sixel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build standalone executable with matching runtime and sources
         run: python scripts/build_portable.py ${{ matrix.target }} --with-sources
       - name: Verify the single file without installed-runtime paths
