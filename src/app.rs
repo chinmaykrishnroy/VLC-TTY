@@ -340,16 +340,9 @@ impl App {
     pub fn audio_title(&self) -> String {
         let source = self.current.as_deref();
         if let Some(title) = self.audio_metadata.as_ref().and_then(|m| m.title.as_ref()) {
-            if let Some(source) = source.filter(|s| s.contains("://")) {
-                let name = source
-                    .split(['?', '#'])
-                    .next()
-                    .unwrap_or(source)
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(source);
+            if let Some(source) = source {
                 // LibVLC may use the encoded MRL basename as a provisional title.
-                if title == source || title == name {
+                if crate::metadata::is_url_title(source, title) {
                     return crate::metadata::display_name(source);
                 }
             }
@@ -549,18 +542,11 @@ impl App {
                 let mut incoming = player.media_metadata();
                 let network = self.current.as_deref().is_some_and(|s| s.contains("://"));
                 if let Some(source) = self.current.as_deref().filter(|_| network) {
-                    let encoded_name = source
-                        .split(['?', '#'])
-                        .next()
-                        .unwrap_or(source)
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or(source);
-                    if incoming.title.as_deref().is_some_and(|t| {
-                        t == source
-                            || t == encoded_name
-                            || t == crate::metadata::display_name(source)
-                    }) {
+                    if incoming
+                        .title
+                        .as_deref()
+                        .is_some_and(|t| crate::metadata::is_url_title(source, t))
+                    {
                         incoming.title = None; // Do not overwrite parsed tags with a provisional URL title.
                     }
                 }
@@ -1692,6 +1678,14 @@ mod tests {
             Some("Jodhaa Akbar")
         );
         assert_eq!(app.last_state, 3);
+        player.metadata.title = Some("Inn Lamhon.mp3?source=pi".into());
+        app.metadata_poll_at = Instant::now() - Duration::from_secs(1);
+        app.tick(&mut player);
+        assert_eq!(
+            app.audio_title(),
+            "Inn Lamhon Ke Daaman Mein",
+            "Linux provisional titles must not replace ID3 tags"
+        );
         app.open_media("http://fixture/second.mp3", &mut player)
             .unwrap();
         assert_eq!(app.audio_title(), "second.mp3");

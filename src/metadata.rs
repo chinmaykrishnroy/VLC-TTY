@@ -73,6 +73,23 @@ pub fn is_audio_source(source: &str) -> bool {
     is_audio_file(Path::new(&display_name(source)))
 }
 
+/// LibVLC versions differ on whether a provisional MRL title is decoded and
+/// whether it retains the query string. None should replace actual track tags.
+pub fn is_url_title(source: &str, title: &str) -> bool {
+    if !source.contains("://") {
+        return false;
+    }
+    let clean = source.split(['?', '#']).next().unwrap_or(source);
+    [
+        source,
+        clean,
+        source.rsplit('/').next().unwrap_or(source),
+        clean.rsplit('/').next().unwrap_or(clean),
+    ]
+    .into_iter()
+    .any(|candidate| title == candidate || percent_decode(candidate).as_deref() == Some(title))
+}
+
 fn artwork_path(url: &str) -> Option<std::path::PathBuf> {
     let raw = url.strip_prefix("file://")?;
     // Do not follow remote file authorities or network shares from media tags.
