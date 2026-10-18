@@ -28,7 +28,7 @@ The native LibVLC regression also reproduced the custom output reporting zero af
 
 The separate `stream` command transfers the original compressed file through an SSH loopback forward and HTTP byte ranges into local LibVLC. It decoded real Pi video on Windows (14 frames, clock 402 ms) and ran the user's MP3 for 337.6 seconds with pause, seek, mute/unmute and normal quit. The last playback clock was 306.1 seconds after those controls, and all profiling samples confirmed PCM forwarding was disabled. These counters do not certify audible continuity. The real HTTP server regression passed on the Pi, including full/range/suffix/HEAD requests, rejection of other paths and invalid ranges, and server shutdown when its input pipe closes.
 
-For the uninterrupted device check, use the existing audio smoke command with `--steady-audio --duration 45`. It requires matching client/server builds and fails if the receiver records any additional underrun callback after startup; audio-only files do not need a video-glyph assertion. Single-file streaming currently lacks remote directory/playlist expansion and the local-file artwork/tag extraction path for network media.
+For the uninterrupted device check, use the existing audio smoke command with `--steady-audio --duration 45`. It requires matching client/server builds and fails if the receiver records any additional underrun callback after startup; audio-only files do not need a video-glyph assertion. Single-file streaming lacks remote directory/playlist expansion. A subsequent [streamed metadata fix](STREAM-METADATA.md) adds live tags and embedded MP3 covers through bounded range reads; separate remote folder-cover images remain unsupported.
 
 ## Longer pixel-encoder stress result
 

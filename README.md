@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/UI-Ratatui-orange" alt="Ratatui">
 </p>
 
-**VLC-TTY plays video inside your terminal**, with familiar VLC controls powered by LibVLC. Browse files, manage playback and watch through terminal graphics — including silent playback on a headless server over SSH.
+**VLC-TTY plays media inside your terminal**, with familiar VLC controls powered by LibVLC. Play local media, stream compressed files from a server to your local speakers, or render video on a headless server over SSH.
 
 > Development preview. Portable builds embed LibVLC 3; source builds use an installed runtime. A compatible terminal is required. Pi 5 headless decoding and ANSI controls have been tested; pixel-protocol visual acceptance and long sessions remain open. See [validation](VALIDATION.md).
 
@@ -23,6 +23,7 @@
 - Kitty, Sixel and iTerm2 pixel graphics, plus ANSI half-block fallback.
 - Silent SSH profile with bounded decode size and frame rate.
 - Original compressed-file streaming over SSH with local decoding, speakers and seeking.
+- Experimental server-rendered playback with PCM audio forwarded to local speakers.
 - Runtime diagnostics and a headless decoding check.
 
 ## Get started
@@ -70,7 +71,7 @@ vlc-tty --ssh --doctor
 vlc-tty --ssh --smoke-test /path/to/movie.mp4
 ```
 
-The smoke check requires decoded frames and an advancing playback clock, without opening a UI. Plain SSH does not forward sound to client speakers. An [experimental audio helper](docs/REMOTE-AUDIO.md) is in development; synchronized remote audio is not yet validated. Read the [SSH guide](docs/SSH.md) for terminal setup, tmux and Pi acceptance checks.
+The smoke check requires decoded frames and an advancing playback clock, without opening a UI. Plain SSH does not forward sound to client speakers. For server-rendered video with forwarded audio, use `vlc-tty connect user@pi /path/to/movie.mp4`; both machines need compatible builds. This [experimental audio helper](docs/REMOTE-AUDIO.md) is implemented, but physical A/V synchronization and movie-length reliability remain unvalidated. Prefer `stream` for ordinary remote files. Read the [SSH guide](docs/SSH.md) for terminal setup, tmux and Pi acceptance checks.
 
 ## Controls
 

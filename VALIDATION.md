@@ -1,5 +1,15 @@
 # Validation — 17 October 2026
 
+## Follow-up evidence — 18 October 2026
+
+The sections below preserve earlier checkpoint results. Current audio, fullscreen and sustained encoder evidence is recorded in [audio and fullscreen development checks](docs/audio-and-fullscreen-validation.md). That report includes the 660-second concurrent Pi PTY tests: Sixel encoded 8,996 frames and passed its minimum; Kitty encoded 5,859 and missed its minimum. Neither result establishes client-visible FPS or movie-length playback.
+
+Original-file `stream` playback and experimental PCM `connect` forwarding are implemented. A 45-second Pi-to-Windows receiver check recorded no additional underrun callbacks after startup, with 126 during startup. Physical A/V alignment remains unvalidated; the 400 ms jitter allowance can exceed the 250 ms video-delay correction cap, but those constants alone do not measure the audible/visible offset.
+
+The streamed metadata checkpoint (`35d8e49`) passed 90 deterministic Rust tests and five explicit LibVLC runtime tests on Windows x64. The HTTP MP3 metadata/artwork runtime regression also passed on the physical Pi with the headless build. Actual Pi-file playback through both the Windows source player and standalone executable displayed the title, artist, album and Sixel cover, then exited cleanly. These are automated console-content/protocol assertions, not human visual-quality or audible-quality certification. See [streamed metadata](docs/STREAM-METADATA.md) for the implementation and limits.
+
+Public publication still requires verified Windows/macOS runtime source correspondence. No public release is established by these development checks.
+
 ## 0.0.1 portable work
 
 The reported Windows failure was reproduced from the exact downloaded ARM64 executable (`PE machine 0xAA64`) on Windows x64. Windows rejected the incompatible architecture; the matching x64 source executable launched and decoded video. Portable release names now use explicit `windows-x64` and `windows-arm64` labels, and packaging inspects native file headers.
@@ -67,7 +77,7 @@ Unit tests report runtime tests as ignored by default, so machines without VLC c
 - Kitty, Sixel and iTerm2: inspect caption/OSD visibility, menus, resize, fullscreen transitions, repeated media opens, renderer toggling, image cleanup and tmux passthrough. ANSI fallback needs a real terminal check too.
 - Sustained playback and input responsiveness on low-bandwidth connections, large files and live streams.
 - Unicode paths, invalid media/URLs, track switching and embedded subtitles across platforms.
-- Optional local audio/lipsync and native-window behavior. Audio forwarding to the SSH client is not implemented.
+- Local audio/lip-sync and native-window behavior. SSH client audio forwarding is implemented through the experimental `connect` helper; speaker/video alignment, network impairment and movie-length continuity remain acceptance gates.
 - Clean-machine installation, platform security prompts, signing/notarization if future distribution claims require them.
 
 Thin application builds require installed matching LibVLC libraries and plugins; portable builds embed their runtime. Automated and short device checks do not establish movie-length performance, audible output, terminal pixel quality, platform signing or VLC feature parity.

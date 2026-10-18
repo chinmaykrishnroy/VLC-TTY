@@ -8,4 +8,4 @@ Cached `file://` artwork reported by LibVLC is decoded on a background worker. S
 
 The same ID3 block supplies text tags when LibVLC omits them for an HTTP stream. Provisional URL titles cannot overwrite a parsed song title. One pending artwork job is replaceable, and results carry the media revision so old covers or tags cannot appear on a new track. Covers are decoded with image dimension and allocation limits. Network tag reads are attempted once per track; a failed cover fetch leaves playback running. Separate remote folder images are not currently served by the single-file tunnel.
 
-The synthetic fixture and generation notes are in [samples](../samples/README.md). The native HTTP regression requires the title, artist, album, 64 × 64 embedded cover and an advancing playback clock to reach the app through its normal update loop.
+The synthetic fixture and generation notes are described in [test media](../samples/README.md); the media fixture itself is in the source checkout. The native HTTP regression requires the title, artist, album, 64 × 64 embedded cover and an advancing playback clock to reach the app through its normal update loop.

@@ -1,6 +1,6 @@
 # Roadmap
 
-The release gate is a usable terminal player, including silent SSH playback. Checkboxes describe implementation status, not device certification. See [validation](VALIDATION.md) for evidence.
+The release gate is a usable terminal player for local media and remote files, with headless server rendering available over SSH. Checkboxes describe implementation status, not device certification. See [validation](VALIDATION.md) for evidence.
 
 ## Prototype SSH foundation (completed before public 0.0.1)
 
@@ -13,7 +13,8 @@ The release gate is a usable terminal player, including silent SSH playback. Che
 - [x] Pass native CI, runtime decoding and extracted-archive checks across the release matrix.
 - [x] Verify Pi 5 / Ubuntu Server 26.04 headless decoding, ANSI controls and direct SSH transport.
 - [ ] Complete pixel-protocol visual acceptance in the intended client terminal.
-- [ ] Measure movie-length responsiveness, rendering throughput and resource usage beyond the initial 45-second synthetic check.
+- [x] Record an 11-minute Pi encoder stress run beyond 5,000 frames for Kitty and Sixel, with separate throughput and memory measurements.
+- [ ] Resolve Kitty's missed throughput target and measure movie-length responsiveness in real client terminals; PTY sink results do not establish visible FPS.
 
 ## Public 0.0.1
 
@@ -25,6 +26,11 @@ The release gate is a usable terminal player, including silent SSH playback. Che
 
 ## Next usability milestones
 
+- [x] Stream original remote files through SSH with local LibVLC decoding, audio and range seeking.
+- [x] Load streamed MP3 tags and embedded covers through bounded background range reads; display readable URL filenames.
+- [x] Implement authenticated PCM forwarding and a local receiver through the `connect` helper.
+- [ ] Validate server-rendered A/V alignment, jitter handling, device loss and movie-length audio continuity.
+- [ ] Measure Kitty transfer/encoding costs and compare serial benchmark baselines before selecting optimizations.
 - Interactive queue editing and saving the current queue.
 - Saved settings, recent media and resume positions.
 - Better stream buffering/error reporting and reconnect behavior.
@@ -33,4 +39,4 @@ The release gate is a usable terminal player, including silent SSH playback. Che
 
 ## Later exploration
 
-Audio forwarding with an explicit transport and synchronization design; measured Pi acceleration; more Linux architectures. Keep portable executables as the default distribution; consider an installer only if later integration features justify one.
+Adaptive audio buffering and reconnect/resume; measured Pi acceleration; more Linux architectures. Keep portable executables as the default distribution; consider an installer only if later integration features justify one.
