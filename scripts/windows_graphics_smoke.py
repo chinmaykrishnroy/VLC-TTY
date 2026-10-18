@@ -222,7 +222,7 @@ if __name__ == "__main__":
         incoming = os.open("CONIN$", os.O_RDWR | os.O_BINARY)
         outgoing = os.open("CONOUT$", os.O_RDWR | os.O_BINARY)
         try:
-            raise SystemExit(subprocess.call([sys.argv[2], "--silent"], stdin=incoming,
+            raise SystemExit(subprocess.call([sys.argv[2], *sys.argv[3:], "--silent"], stdin=incoming,
                                               stdout=outgoing, stderr=outgoing))
         finally:
             os.close(incoming)

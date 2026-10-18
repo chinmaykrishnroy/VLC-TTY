@@ -2,6 +2,7 @@
 
 ## 0.0.1 (first public version, in development)
 
+- Display readable stream filenames, live LibVLC title/artist/album tags and embedded MP3 covers over SSH; fetch only bounded ID3 ranges on a background worker and reject stale covers after track changes.
 - Restore Windows automatic pixel-graphics detection for dropped audio artwork and video with a bounded native console probe; preserve early shortcuts and keep ANSI fallback for unsupported terminals.
 - Stream original remote file bytes over SSH into local LibVLC with byte-range seeking; no remote player or transcoding required.
 - Make forwarded PCM volume explicit and test actual muted/restored samples against LibVLC, rather than relying on the custom output's native volume readout.

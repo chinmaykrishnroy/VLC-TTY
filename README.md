@@ -53,7 +53,7 @@ For music or a video file stored on a server, stream the original file to your l
 vlc-tty stream user@pi '/home/user/Music/song.mp3'
 ```
 
-Decoding, terminal rendering and audio run locally. The server needs SSH and Python 3, with no VLC-TTY installation or public HTTP port. Byte ranges support seeking without transcoding or a mandatory full download. This mode currently opens one regular file; remote directory browsing, playlist expansion and embedded artwork/metadata in the TUI remain follow-up work.
+Decoding, terminal rendering and audio run locally. The server needs SSH and Python 3, with no VLC-TTY installation or public HTTP port. Byte ranges support seeking without transcoding or a mandatory full download. Track tags update from LibVLC, and embedded MP3 artwork loads through bounded ID3 range reads. The UI shows readable filenames instead of URL escapes. This mode currently opens one regular file; remote directory browsing, playlist expansion and separate folder-cover images remain follow-up work.
 
 To run decoding and the terminal UI on the headless server instead, use the server player:
 

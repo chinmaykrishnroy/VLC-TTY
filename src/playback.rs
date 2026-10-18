@@ -14,6 +14,9 @@ pub trait Playback {
     fn rate(&self) -> f32;
     fn set_rate(&mut self, rate: f32);
     fn snapshot(&self) -> PlaybackSnapshot;
+    fn media_metadata(&self) -> crate::metadata::MediaMetadata {
+        crate::metadata::MediaMetadata::default()
+    }
     fn subtitle_tracks(&self) -> Vec<MediaTrack>;
     fn current_subtitle_id(&self) -> i32;
     fn select_subtitle(&mut self, id: i32) -> bool;
@@ -27,6 +30,9 @@ pub trait Playback {
 }
 
 impl Playback for VlcPlayer {
+    fn media_metadata(&self) -> crate::metadata::MediaMetadata {
+        VlcPlayer::media_metadata(self)
+    }
     fn open(&mut self, source: &str) -> Result<()> {
         VlcPlayer::open(self, source)
     }
@@ -107,6 +113,7 @@ pub mod test_support {
         pub reject_open: bool,
         pub reject_tracks: bool,
         pub reject_delays: bool,
+        pub metadata: crate::metadata::MediaMetadata,
     }
     impl Default for FakePlayback {
         fn default() -> Self {
@@ -124,10 +131,14 @@ pub mod test_support {
                 reject_open: false,
                 reject_tracks: false,
                 reject_delays: false,
+                metadata: Default::default(),
             }
         }
     }
     impl Playback for FakePlayback {
+        fn media_metadata(&self) -> crate::metadata::MediaMetadata {
+            self.metadata.clone()
+        }
         fn open(&mut self, source: &str) -> Result<()> {
             if self.reject_open {
                 anyhow::bail!("test open failure");

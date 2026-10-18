@@ -247,6 +247,9 @@ struct Api {
     media_new_path: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
     media_new_location: unsafe extern "C" fn(*mut c_void, *const c_char) -> *mut c_void,
     media_release: unsafe extern "C" fn(*mut c_void),
+    media_get_meta: unsafe extern "C" fn(*mut c_void, c_int) -> *mut c_char,
+    free: unsafe extern "C" fn(*mut c_void),
+    player_get_media: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
     player_new: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
     player_release: unsafe extern "C" fn(*mut c_void),
     player_set_media: unsafe extern "C" fn(*mut c_void, *mut c_void),
@@ -374,6 +377,9 @@ impl Api {
             media_new_path: f!("libvlc_media_new_path"),
             media_new_location: f!("libvlc_media_new_location"),
             media_release: f!("libvlc_media_release"),
+            media_get_meta: f!("libvlc_media_get_meta"),
+            free: f!("libvlc_free"),
+            player_get_media: f!("libvlc_media_player_get_media"),
             player_new: f!("libvlc_media_player_new"),
             player_release: f!("libvlc_media_player_release"),
             player_set_media: f!("libvlc_media_player_set_media"),
@@ -766,6 +772,37 @@ impl VlcPlayer {
             }
         }
         Ok(())
+    }
+
+    pub fn media_metadata(&self) -> crate::metadata::MediaMetadata {
+        unsafe {
+            // get_media retains a reference; each get_meta string uses libvlc_free.
+            let media = (self.api.player_get_media)(self.player);
+            if media.is_null() {
+                return Default::default();
+            }
+            let read = |kind| {
+                let value = (self.api.media_get_meta)(media, kind);
+                if value.is_null() {
+                    return None;
+                }
+                // Some demuxers expose an ID3 UTF-16 BOM as a leading U+FEFF.
+                let text = CStr::from_ptr(value)
+                    .to_string_lossy()
+                    .trim_start_matches('\u{feff}')
+                    .to_owned();
+                (self.api.free)(value.cast());
+                (!text.trim().is_empty()).then_some(text)
+            };
+            let result = crate::metadata::MediaMetadata {
+                title: read(0),
+                artist: read(1),
+                album: read(4),
+                artwork_url: read(15),
+            };
+            (self.api.media_release)(media);
+            result
+        }
     }
 
     pub fn toggle_pause(&mut self) {
@@ -1336,7 +1373,7 @@ mod tests {
         } else {
             "200 OK"
         };
-        let mut header = format!("HTTP/1.1 {status}\r\nContent-Type: video/mp4\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n", data.len());
+        let mut header = format!("HTTP/1.1 {status}\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nAccept-Ranges: bytes\r\nConnection: close\r\n", data.len());
         if range.is_some() {
             header.push_str(&format!(
                 "Content-Range: bytes {start}-{end}/{}\r\n",
@@ -1422,6 +1459,50 @@ mod tests {
                 thread.join().unwrap();
             }
         }
+    }
+
+    #[test]
+    #[ignore = "requires installed LibVLC 3 and loopback sockets; run with --ignored --test-threads=1"]
+    fn real_http_audio_metadata_and_embedded_art_reach_the_ui() {
+        use crate::app::App;
+        use std::time::{Duration, Instant};
+        let server = HttpFixture::new(include_bytes!("../samples/tagged-audio.mp3").to_vec());
+        let mut player = VlcPlayer::new_with_options(false, &["--aout=dummy"]).unwrap();
+        let mut app = App::new(None);
+        app.open_media(
+            &format!(
+                "http://127.0.0.1:{}/SSH%20Metadata.mp3?source=pi",
+                server.port
+            ),
+            &mut player,
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(15);
+        while Instant::now() < deadline {
+            app.tick(&mut player);
+            if app.audio_thumbnail().is_some() && player.snapshot().time_ms > 200 {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        let meta = app
+            .audio_metadata
+            .as_ref()
+            .expect("Network metadata was ignored");
+        assert_eq!(app.audio_title(), "SSH Metadata Track");
+        assert_eq!(meta.artist.as_deref(), Some("VLC-TTY Test Artist"));
+        assert_eq!(meta.album.as_deref(), Some("Stream Regression Album"));
+        let art = app
+            .audio_thumbnail()
+            .unwrap_or_else(|| panic!("Missing streamed art: {:?}", player.media_metadata()));
+        assert_eq!((art.width, art.height), (64, 64));
+        assert!(player.snapshot().time_ms > 200);
+        player.stop();
+        // Switching media must clear the old cover and tags immediately.
+        app.open_media("http://127.0.0.1:1/next.mp3", &mut player)
+            .unwrap();
+        assert!(app.audio_thumbnail().is_none());
+        assert_eq!(app.audio_title(), "next.mp3");
     }
 
     #[test]

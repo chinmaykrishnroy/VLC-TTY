@@ -29,6 +29,218 @@ pub struct AudioMetadata {
     pub thumbnail: Option<Arc<VideoFrame>>,
 }
 
+/// Metadata discovered by LibVLC's demuxer, including for network media.
+#[derive(Clone, Debug, Default)]
+pub struct MediaMetadata {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub artwork_url: Option<String>,
+}
+
+fn percent_decode(text: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(text.len());
+    let mut input = text.as_bytes().iter().copied();
+    while let Some(byte) = input.next() {
+        if byte == b'%' {
+            let high = char::from(input.next()?).to_digit(16)?;
+            let low = char::from(input.next()?).to_digit(16)?;
+            bytes.push((high * 16 + low) as u8);
+        } else {
+            bytes.push(byte);
+        }
+    }
+    String::from_utf8(bytes).ok()
+}
+
+/// Decode only a URL's final path component. Local percent signs and URL '+'
+/// characters are literal; query strings must not become part of the title.
+pub fn display_name(source: &str) -> String {
+    if source.contains("://") {
+        let path = source.split(['?', '#']).next().unwrap_or(source);
+        let name = path.rsplit('/').next().unwrap_or(path);
+        percent_decode(name).unwrap_or_else(|| name.to_owned())
+    } else {
+        source
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(source)
+            .to_owned()
+    }
+}
+
+pub fn is_audio_source(source: &str) -> bool {
+    is_audio_file(Path::new(&display_name(source)))
+}
+
+fn artwork_path(url: &str) -> Option<std::path::PathBuf> {
+    let raw = url.strip_prefix("file://")?;
+    // Do not follow remote file authorities or network shares from media tags.
+    let raw = raw
+        .strip_prefix("localhost/")
+        .map(|p| format!("/{p}"))
+        .unwrap_or_else(|| raw.to_owned());
+    if !raw.starts_with('/') || raw.starts_with("//") {
+        return None;
+    }
+    let path = percent_decode(&raw)?;
+    if path.starts_with("//") || path.starts_with("/\\") || path.starts_with("\\\\") {
+        return None;
+    }
+    #[cfg(windows)]
+    let path = if path.as_bytes().get(2) == Some(&b':') {
+        path[1..].to_owned()
+    } else {
+        path
+    };
+    Some(path.into())
+}
+
+type ArtworkResult = (u64, String, Option<AudioMetadata>);
+enum ArtworkJob {
+    File(std::path::PathBuf),
+    Id3(String),
+}
+
+/// Decode cached artwork off the UI thread with one replaceable pending job.
+/// Media revisions prevent late results from replacing the next track's cover.
+#[derive(Default)]
+pub struct ArtworkLoader {
+    requests: Option<crate::latest::Sender<(u64, String, ArtworkJob)>>,
+    results: Option<crate::latest::Receiver<ArtworkResult>>,
+    requested: Option<(u64, String)>,
+}
+
+impl std::fmt::Debug for ArtworkLoader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ArtworkLoader")
+            .field("pending", &self.requested.is_some())
+            .finish()
+    }
+}
+
+impl ArtworkLoader {
+    pub fn request(&mut self, revision: u64, url: &str) {
+        if self
+            .requested
+            .as_ref()
+            .is_some_and(|(r, u)| *r == revision && u == url)
+        {
+            return;
+        }
+        let job = artwork_path(url).map(ArtworkJob::File).or_else(|| {
+            (url.starts_with("http://") && display_name(url).to_ascii_lowercase().ends_with(".mp3"))
+                .then(|| ArtworkJob::Id3(url.to_owned()))
+        });
+        let Some(job) = job else {
+            return;
+        };
+        if self.requests.is_none() {
+            let (requests, incoming) = crate::latest::channel::<(u64, String, ArtworkJob)>();
+            let (outgoing, results) = crate::latest::channel();
+            if std::thread::Builder::new()
+                .name("album-art".into())
+                .spawn(move || {
+                    while let Some((revision, url, job)) = incoming.recv() {
+                        let image = match job {
+                            ArtworkJob::File(path) => {
+                                load_artwork(&path).map(|thumbnail| AudioMetadata {
+                                    thumbnail: Some(thumbnail),
+                                    ..Default::default()
+                                })
+                            }
+                            ArtworkJob::Id3(url) => fetch_id3_art(&url),
+                        };
+                        if outgoing.replace((revision, url, image)).is_err() {
+                            break;
+                        }
+                    }
+                })
+                .is_err()
+            {
+                return;
+            }
+            self.requests = Some(requests);
+            self.results = Some(results);
+        }
+        self.requested = Some((revision, url.to_owned()));
+        if let Some(requests) = &self.requests {
+            let _ = requests.replace((revision, url.to_owned(), job));
+        }
+    }
+
+    pub fn poll(&mut self, revision: u64) -> Option<AudioMetadata> {
+        let (received, url, image) = self.results.as_ref()?.try_take()?;
+        if url.starts_with("file://") && self.requested.as_ref() == Some(&(received, url)) {
+            self.requested = None; // Retry if VLC has not finished writing its cache file yet.
+        }
+        (received == revision).then_some(image).flatten()
+    }
+}
+
+fn fetch_id3_art(url: &str) -> Option<AudioMetadata> {
+    let agent = ureq::Agent::config_builder()
+        .proxy(None)
+        .max_redirects(0)
+        .timeout_global(Some(std::time::Duration::from_secs(3)))
+        .build()
+        .new_agent();
+    let range = |end: usize| -> Option<Vec<u8>> {
+        let mut response = agent
+            .get(url)
+            .header("Range", format!("bytes=0-{end}"))
+            .call()
+            .ok()?;
+        // Never accept an unbounded full-file response from a server ignoring Range.
+        if response.status().as_u16() != 206 {
+            return None;
+        }
+        let content_range = response.headers().get("content-range")?.to_str().ok()?;
+        if !content_range.starts_with(&format!("bytes 0-{end}/")) {
+            return None;
+        }
+        let bytes = response
+            .body_mut()
+            .with_config()
+            // Allow the reader to observe EOF after the exact expected body.
+            // The length check below still rejects an extra byte.
+            .limit((end + 2) as u64)
+            .read_to_vec()
+            .ok()?;
+        (bytes.len() == end + 1).then_some(bytes)
+    };
+    let header = range(9)?;
+    if !header.starts_with(b"ID3") || header[6..10].iter().any(|b| b & 0x80 != 0) {
+        return None;
+    }
+    let size = synchsafe_u32(&header[6..10]) as usize;
+    if size == 0 || size > 16 * 1024 * 1024 {
+        return None;
+    }
+    let bytes = range(9 + size)?;
+    let mut meta = AudioMetadata::default();
+    parse_id3v2(&bytes, &mut meta);
+    Some(meta)
+}
+
+fn load_artwork(path: &Path) -> Option<Arc<VideoFrame>> {
+    let file = File::open(path).ok()?;
+    if !file.metadata().ok()?.is_file() || file.metadata().ok()?.len() > 16 * 1024 * 1024 {
+        return None;
+    }
+    decode_artwork(std::io::BufReader::new(file))
+}
+
+fn decode_artwork(reader: impl std::io::BufRead + Seek) -> Option<Arc<VideoFrame>> {
+    let mut reader = image::ImageReader::new(reader).with_guessed_format().ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(4096);
+    limits.max_image_height = Some(4096);
+    limits.max_alloc = Some(64 * 1024 * 1024);
+    reader.limits(limits);
+    Some(image_to_video_frame(reader.decode().ok()?))
+}
+
 /// Convert an image::DynamicImage into an owned VideoFrame for TUI rendering
 pub fn image_to_video_frame(img: image::DynamicImage) -> Arc<VideoFrame> {
     let rgba = img.to_rgba8();
@@ -103,9 +315,9 @@ fn scan_magic_image(buf: &[u8]) -> Option<Arc<VideoFrame>> {
         if (buf[i] == 0xFF && buf[i + 1] == 0xD8 && buf[i + 2] == 0xFF)
             || buf[i..].starts_with(b"\x89PNG\r\n\x1a\n")
         {
-            if let Ok(img) = image::load_from_memory(&buf[i..]) {
-                if img.width() >= 32 && img.height() >= 32 {
-                    return Some(image_to_video_frame(img));
+            if let Some(img) = decode_artwork(std::io::Cursor::new(&buf[i..])) {
+                if img.width >= 32 && img.height >= 32 {
+                    return Some(img);
                 }
             }
         }
@@ -247,8 +459,8 @@ fn parse_id3_apic(payload: &[u8], version: u8) -> Option<Arc<VideoFrame>> {
 
     if idx < payload.len() {
         let img_bytes = &payload[idx..];
-        if let Ok(img) = image::load_from_memory(img_bytes) {
-            return Some(image_to_video_frame(img));
+        if let Some(img) = decode_artwork(std::io::Cursor::new(img_bytes)) {
+            return Some(img);
         }
     }
     // Fallback: look for JPEG/PNG header in the frame payload directly
@@ -469,6 +681,60 @@ fn parse_mp4_m4a(data: &[u8], meta: &mut AudioMetadata) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn url_display_names_decode_once_without_changing_local_names() {
+        assert_eq!(
+            display_name("http://localhost/token/a%20b%23%C3%A9+z.mp3?token=secret#fragment"),
+            "a b#é+z.mp3"
+        );
+        assert_eq!(display_name("http://localhost/a%2520b.mp3"), "a%20b.mp3");
+        assert_eq!(display_name("C:\\Music\\a%20b.mp3"), "a%20b.mp3");
+        assert_eq!(display_name("http://localhost/a%ZZ.mp3"), "a%ZZ.mp3");
+        assert!(is_audio_source("http://localhost/track.mp3?download=1"));
+        assert!(artwork_path("file://other-host/share/art.jpg").is_none());
+        assert!(artwork_path("file:///%2Fother-host/share/art.jpg").is_none());
+        assert!(artwork_path("file:///%5Cother-host/share/art.jpg").is_none());
+        assert!(artwork_path("https://example.com/art.jpg").is_none());
+        #[cfg(windows)]
+        assert_eq!(
+            artwork_path("file:///C:/Album%20Art/cover.jpg"),
+            Some("C:/Album Art/cover.jpg".into())
+        );
+        #[cfg(unix)]
+        assert_eq!(
+            artwork_path("file:///tmp/Album%20Art/cover.jpg"),
+            Some("/tmp/Album Art/cover.jpg".into())
+        );
+    }
+
+    #[test]
+    fn late_artwork_cannot_replace_another_tracks_cover() {
+        let (sender, receiver) = crate::latest::channel();
+        let mut loader = ArtworkLoader {
+            results: Some(receiver),
+            ..Default::default()
+        };
+        let art = image_to_video_frame(image::DynamicImage::new_rgb8(32, 32));
+        let _ = sender.replace((
+            1,
+            "old".into(),
+            Some(AudioMetadata {
+                thumbnail: Some(art.clone()),
+                ..Default::default()
+            }),
+        ));
+        assert!(loader.poll(2).is_none());
+        let _ = sender.replace((
+            2,
+            "new".into(),
+            Some(AudioMetadata {
+                thumbnail: Some(art),
+                ..Default::default()
+            }),
+        ));
+        assert!(loader.poll(2).is_some());
+    }
 
     #[test]
     fn id3_text_respects_encoding_and_bom() {

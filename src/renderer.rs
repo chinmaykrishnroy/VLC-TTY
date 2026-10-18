@@ -255,16 +255,7 @@ fn render_audio_meta_banner(f: &mut Frame, app: &App, area: Rect) {
     }
     let meta_rect = Rect::new(area.x, area.bottom().saturating_sub(3), area.width, 3);
     f.render_widget(Clear, meta_rect);
-    let title = app
-        .audio_metadata
-        .as_ref()
-        .and_then(|m| m.title.as_deref())
-        .or_else(|| {
-            app.current
-                .as_deref()
-                .and_then(|c| c.rsplit(['/', '\\']).next())
-        })
-        .unwrap_or("Audio Track");
+    let title = app.audio_title();
     let artist = app
         .audio_metadata
         .as_ref()
@@ -277,7 +268,7 @@ fn render_audio_meta_banner(f: &mut Frame, app: &App, area: Rect) {
         .unwrap_or("Unknown Album");
     let meta_text = Paragraph::new(vec![
         Line::styled(
-            format!(" {} ", short(title, area.width.saturating_sub(4) as usize)),
+            format!(" {} ", short(&title, area.width.saturating_sub(4) as usize)),
             Style::default().fg(ORANGE).add_modifier(Modifier::BOLD),
         ),
         Line::styled(
@@ -300,16 +291,7 @@ fn render_audio_card(f: &mut Frame, app: &App, info: &PlaybackSnapshot, area: Re
     }
     f.render_widget(Block::default().style(Style::default().bg(BG_DARK)), area);
 
-    let title = app
-        .audio_metadata
-        .as_ref()
-        .and_then(|m| m.title.as_deref())
-        .or_else(|| {
-            app.current
-                .as_deref()
-                .and_then(|c| c.rsplit(['/', '\\']).next())
-        })
-        .unwrap_or("Audio Track");
+    let title = app.audio_title();
     let artist = app
         .audio_metadata
         .as_ref()
@@ -339,7 +321,7 @@ fn render_audio_card(f: &mut Frame, app: &App, info: &PlaybackSnapshot, area: Re
         ),
         Line::raw(""),
         Line::styled(
-            short(title, inner.width as usize),
+            short(&title, inner.width as usize),
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
@@ -1335,6 +1317,29 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn streamed_audio_card_decodes_filename_for_display() {
+        use crate::playback::{test_support::FakePlayback, Playback};
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut app = App::new(None);
+        let mut player = FakePlayback::default();
+        app.open_media("http://127.0.0.1:1234/token/Inn%20Lamhon.mp3", &mut player)
+            .unwrap();
+        let mut terminal = Terminal::new(TestBackend::new(100, 32)).unwrap();
+        terminal
+            .draw(|frame| render_audio_card(frame, &app, &player.snapshot(), frame.area()))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(text.contains("Inn Lamhon.mp3"), "{text}");
+        assert!(!text.contains("%20"));
+    }
+
     #[test]
     fn normal_layout_has_click_targets() {
         use crate::graphics::{GraphicsChoice, GraphicsRenderer};

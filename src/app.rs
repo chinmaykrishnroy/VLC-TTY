@@ -219,6 +219,8 @@ pub struct App {
     pub active_menu: Option<MenuKind>,
     pub menu_selected: usize,
     pub audio_metadata: Option<crate::metadata::AudioMetadata>,
+    metadata_poll_at: Instant,
+    artwork_loader: crate::metadata::ArtworkLoader,
     pending_native_subtitle: Option<PathBuf>,
 }
 
@@ -306,6 +308,8 @@ impl App {
             active_menu: None,
             menu_selected: 0,
             audio_metadata: None,
+            metadata_poll_at: Instant::now() - Duration::from_secs(1),
+            artwork_loader: Default::default(),
             pending_native_subtitle: None,
         };
         app.refresh();
@@ -330,8 +334,30 @@ impl App {
     pub fn is_audio(&self) -> bool {
         self.current
             .as_deref()
-            .map(Path::new)
-            .is_some_and(crate::metadata::is_audio_file)
+            .is_some_and(crate::metadata::is_audio_source)
+    }
+
+    pub fn audio_title(&self) -> String {
+        let source = self.current.as_deref();
+        if let Some(title) = self.audio_metadata.as_ref().and_then(|m| m.title.as_ref()) {
+            if let Some(source) = source.filter(|s| s.contains("://")) {
+                let name = source
+                    .split(['?', '#'])
+                    .next()
+                    .unwrap_or(source)
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(source);
+                // LibVLC may use the encoded MRL basename as a provisional title.
+                if title == source || title == name {
+                    return crate::metadata::display_name(source);
+                }
+            }
+            return title.clone();
+        }
+        source
+            .map(crate::metadata::display_name)
+            .unwrap_or_else(|| "Audio Track".into())
     }
 
     pub fn notify(&mut self, message: impl Into<String>) {
@@ -356,6 +382,7 @@ impl App {
     pub fn open_media(&mut self, source: &str, player: &mut dyn Playback) -> Result<()> {
         player.open(source)?;
         self.media_revision = self.media_revision.wrapping_add(1);
+        self.metadata_poll_at = Instant::now() - Duration::from_secs(1);
         let normalized = if source.contains("://") {
             source.to_owned()
         } else {
@@ -516,6 +543,61 @@ impl App {
     }
 
     pub fn tick(&mut self, player: &mut dyn Playback) {
+        if self.is_audio() {
+            if self.metadata_poll_at.elapsed() >= Duration::from_millis(250) {
+                self.metadata_poll_at = Instant::now();
+                let mut incoming = player.media_metadata();
+                let network = self.current.as_deref().is_some_and(|s| s.contains("://"));
+                if let Some(source) = self.current.as_deref().filter(|_| network) {
+                    let encoded_name = source
+                        .split(['?', '#'])
+                        .next()
+                        .unwrap_or(source)
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(source);
+                    if incoming.title.as_deref().is_some_and(|t| {
+                        t == source
+                            || t == encoded_name
+                            || t == crate::metadata::display_name(source)
+                    }) {
+                        incoming.title = None; // Do not overwrite parsed tags with a provisional URL title.
+                    }
+                }
+                let meta = self.audio_metadata.get_or_insert_with(Default::default);
+                for (current, value) in [
+                    (&mut meta.title, incoming.title),
+                    (&mut meta.artist, incoming.artist),
+                    (&mut meta.album, incoming.album),
+                ] {
+                    if value.is_some() && (network || current.is_none()) {
+                        *current = value;
+                    }
+                }
+                if meta.thumbnail.is_none() {
+                    if let Some(url) = incoming.artwork_url.filter(|u| u.starts_with("file://")) {
+                        self.artwork_loader.request(self.media_revision, &url);
+                    } else if let Some(source) = &self.current {
+                        self.artwork_loader.request(self.media_revision, source);
+                    }
+                }
+            }
+            if let Some(found) = self.artwork_loader.poll(self.media_revision) {
+                let meta = self.audio_metadata.get_or_insert_with(Default::default);
+                for (current, value) in [
+                    (&mut meta.title, found.title),
+                    (&mut meta.artist, found.artist),
+                    (&mut meta.album, found.album),
+                ] {
+                    if value.is_some() {
+                        *current = value;
+                    }
+                }
+                if found.thumbnail.is_some() {
+                    meta.thumbnail = found.thumbnail;
+                }
+            }
+        }
         let state = player.snapshot().state;
         if state == self.last_state {
             return;
@@ -1582,6 +1664,39 @@ mod tests {
 
     use super::*;
     use crate::playback::test_support::FakePlayback;
+
+    #[test]
+    fn streamed_tags_update_while_playback_state_stays_playing() {
+        let mut app = App::new(None);
+        let mut player = FakePlayback::default();
+        app.open_media("http://fixture/Inn%20Lamhon.mp3?source=pi", &mut player)
+            .unwrap();
+        player.metadata.title = Some("Inn%20Lamhon.mp3".into());
+        app.tick(&mut player);
+        assert_eq!(app.audio_title(), "Inn Lamhon.mp3");
+        player.metadata = crate::metadata::MediaMetadata {
+            title: Some("Inn Lamhon Ke Daaman Mein".into()),
+            artist: Some("A.R. Rahman".into()),
+            album: Some("Jodhaa Akbar".into()),
+            ..Default::default()
+        };
+        app.metadata_poll_at = Instant::now() - Duration::from_secs(1);
+        app.tick(&mut player);
+        assert_eq!(app.audio_title(), "Inn Lamhon Ke Daaman Mein");
+        assert_eq!(
+            app.audio_metadata.as_ref().unwrap().artist.as_deref(),
+            Some("A.R. Rahman")
+        );
+        assert_eq!(
+            app.audio_metadata.as_ref().unwrap().album.as_deref(),
+            Some("Jodhaa Akbar")
+        );
+        assert_eq!(app.last_state, 3);
+        app.open_media("http://fixture/second.mp3", &mut player)
+            .unwrap();
+        assert_eq!(app.audio_title(), "second.mp3");
+        assert!(app.audio_thumbnail().is_none());
+    }
     #[test]
     fn reopening_same_source_invalidates_presentation_and_remote_open_stays_in_terminal() {
         let mut app = App::new(None);
