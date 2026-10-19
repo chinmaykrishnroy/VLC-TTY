@@ -30,3 +30,17 @@ An additional callback regression first failed on the former copy path, then pas
 A final serial source-player probe repeated the exact Pi-to-local transition with the local audio clock active at volume zero: **21.31 backend submissions/sec**, 23.46 callback frames/sec over 39.975 measured seconds, 24 ms encoder p95, 54 ms draw p95, 134 ms request-to-backend p95, 2.10-second dropped-file startup, 128 ms help response, zero encoding failures and clean exit/restoration. Callback copy counters remained zero. These source-player results precede the standalone installation check and retain the presentation/cold-start limitations above.
 
 The pushed encoder checkpoint's CI found a newer Clippy array-chunk lint; the follow-up uses `as_chunks`. Packaging regression checks also require the linked performance report in the explicit documentation inventory. An artwork smoke timed out on shutdown during concurrent checks; the isolated captured rerun and independent hover smoke both passed. A single rerun does not establish that every startup/shutdown timing case is eliminated.
+
+## Standalone, installation and ARM64 verification
+
+The clean-source Windows x64 standalone embeds commit `89e247de2e5da2f6543f0fd18d0b52762a0ed4dc` and LibVLC 3.0.24. SHA-256: `4b801061409f73f1021269d2ed9ef88b5f0299359931beae7472696d81f53c36`.
+
+It passed the full portable verifier: native architecture/static runtime, combined help, concurrent launches, isolated bundled LibVLC, actual decoding, invalid runtime replacement rejection, normal cleanup, explicit extraction, complete documentation and forced Windows Job Object lifetime checks. Bundled Sixel album-art and menu-hover console smokes passed independently.
+
+The standalone repeated the Pi MP3-to-local movie transition with a muted local audio clock: **18.87 backend submissions/sec**, 22.68 callback frames/sec over 37.04 measured seconds, 22 ms encoder p95, 50 ms draw p95, 111 ms request-to-backend p95, 126 ms help response, no encoding failures and clean exit/restoration. Initial UI startup, including private extraction/SSH music setup, took 14.85 seconds. The next file-drop to first new video callback took 5.05 seconds. For all native probe results above, the `first_video_s` field observes callback availability; it does not measure a client's first visible frame.
+
+The verified executable is installed at `C:\Users\morph\AppData\Local\Programs\VLC-TTY\vlc-tty.exe`, and that directory is on the user PATH. Both previous workspace launch names, `target/release/termvlc.exe` and `target/release/vlc-tty.exe`, contain the identical executable. Previous files were renamed to backups; existing user processes were not terminated.
+
+The physical Ubuntu 26 Pi 5 compiled the exact source commit with the headless feature set in a separate testing directory. Its thirty-second Sixel PTY smoke passed: 397 submitted frames in the final report, nine help probes (maximum 45 ms), zero frame copies, zero encoding failures and clean terminal restoration. Peak summed RSS was 144.7 MiB; average sampled CPU was 83.5 percent of one core. This is a short synthetic server smoke, not full-movie presentation evidence; the installed Pi player was not replaced.
+
+[CI at the executable's source commit](https://github.com/chinmaykrishnroy/VLC-TTY/actions/runs/39237309140) passed all eight jobs: six native OS/architecture lanes, Ubuntu 26 ARM64 headless checks, and runtime-source preservation. Public publication remains subject to the existing strict runtime-source correspondence gate.

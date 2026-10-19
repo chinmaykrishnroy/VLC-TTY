@@ -51,6 +51,8 @@ python scripts/windows_playback_probe.py dist/vlc-tty-0.0.1-windows-x64.exe movi
 
 `--audio-clock` enables local audio decoding at volume zero; without it the child uses `--silent`. This tests the local audio-clock path without playing sound, and cannot establish audible lip sync. The default gate requires at least 12 backend submissions/sec, help within 500 ms, no encoder failures and clean terminal restoration. `--duration`, `--columns`, `--rows`, `--minimum-fps` and `--maximum-input-latency` are explicit measurement controls. Cold portable extraction is included in UI startup, separately from the file-drop delay.
 
+The JSON field `first_video_s` records the first new LibVLC display callback observed after the file drop. It does not time the client's first visible pixel frame.
+
 Sixel video quantizes a sampled working image (initial budget 640x360, bounded between 320x180 and 1280x720) and expands palette-index runs to the actual widget pixels. The working image never exceeds the widget or source image. Slow encode/output reduces the budget quickly; sixty consecutive fast encodes allow gradual recovery. This trades spatial detail for motion, retains 256 palette entries, and leaves static album covers on their existing encoder. Resize results still use generation checks. `work_pixel_budget` reports the ceiling, not an assertion of the actual sampled dimensions. `request_to_backend_recent_p95_us` measures encoding-request age at backend completion; it excludes time before enqueueing and client presentation.
 
 ## What this does not measure
