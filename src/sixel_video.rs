@@ -267,8 +267,10 @@ mod tests {
         assert_eq!((decoded.width, decoded.height), (width, height));
         let correct = decoded
             .pixels
-            .chunks_exact(4)
-            .zip(frame.bgra.chunks_exact(4))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(frame.bgra.as_chunks::<4>().0.iter())
             .filter(|(actual, source)| actual[0].abs_diff(source[0]) < 8)
             .count();
         assert!(
@@ -320,12 +322,12 @@ mod tests {
                 panic!("Sixel expected")
             };
             let decoded = icy_sixel::SixelImage::decode(out.data.as_bytes()).unwrap();
-            for (i, actual) in decoded.pixels.chunks_exact(4).enumerate() {
+            for (i, actual) in decoded.pixels.as_chunks::<4>().0.iter().enumerate() {
                 let x = i % decoded.width * frame.width / decoded.width;
                 let y = i / decoded.width * frame.height / decoded.height;
                 let source = &frame.bgra[y * frame.pitch + x * 4..][..4];
                 assert_eq!(
-                    actual,
+                    *actual,
                     [source[2], source[1], source[0], 255],
                     "Periodic colour lost at palette budget {budget}"
                 );
