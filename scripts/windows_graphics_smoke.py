@@ -66,6 +66,10 @@ class Console:
         self.create_console.restype = C.c_long
         self.close_console = self.host.ConptyClosePseudoConsole if library else k.ClosePseudoConsole
         self.close_console.argtypes = [W.HANDLE]
+        self.resize_console = self.host.ConptyResizePseudoConsole if library else k.ResizePseudoConsole
+        self.resize_console.argtypes = [W.HANDLE, Coord]
+        self.resize_console.restype = C.c_long
+        self.coord = Coord
         k.InitializeProcThreadAttributeList.argtypes = [C.c_void_p, W.DWORD, W.DWORD, C.POINTER(C.c_size_t)]
         k.UpdateProcThreadAttribute.argtypes = [C.c_void_p, W.DWORD, C.c_size_t, C.c_void_p, C.c_size_t,
                                                C.c_void_p, C.c_void_p]
@@ -139,6 +143,9 @@ class Console:
         if not self.k.WriteFile(self.input, data, len(data), C.byref(size), None):
             raise C.WinError(C.get_last_error())
 
+    def resize(self, columns, rows):
+        assert self.resize_console(self.console, self.coord(columns, rows)) == 0, "Console resize failed"
+
     def wait_for(self, predicate, timeout=20):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -149,7 +156,7 @@ class Console:
                 self.send(b"\x1b[1;1R")
                 self.cursor_queries = queries
             if self.mode != "timeout":
-                for query, reply in [(b"\x1b[c", b"\x1b[?62;4c" if self.mode == "sixel" else b"\x1b[?1;2c"),
+                for query, reply in [(b"\x1b[c", b"\x1b[?62;4c" if self.mode in {"sixel", "fullscreen"} else b"\x1b[?1;2c"),
                                      (b"\x1b[16t", b"\x1b[6;20;10t"), (b"\x1b[5n", b"\x1b[0n")]:
                     count = data.count(query)
                     if count > self.answered.get(query, 0):
@@ -194,7 +201,8 @@ def smoke(binary, mode="sixel", host=None, startup_timeout=20):
         path = fixture(Path(temporary))
         # CI redirects Python's standard handles. The child bootstrap replaces
         # those with read/write handles to this new console before launching VLC.
-        terminal = Console([sys.executable, Path(__file__).resolve(), "--console-child", binary.resolve()], host, mode)
+        startup = ["--fullscreen"] if mode == "fullscreen" else []
+        terminal = Console([sys.executable, Path(__file__).resolve(), "--console-child", binary.resolve(), *startup], host, mode)
         try:
             data = terminal.wait_for(lambda data: b"\x1b[16t" in data or b"ANSI half-block" in data,
                                      timeout=startup_timeout)
@@ -228,6 +236,25 @@ def smoke(binary, mode="sixel", host=None, startup_timeout=20):
                 terminal.send(b"\x1b[<35;22;1M")
                 terminal.wait_for(lambda data: b"Cycle Audio Track" in data[start:] and b"Volume Up" in data[start:])
                 terminal.send(b"\x1b")
+            elif mode == "fullscreen":
+                terminal.send(('"' + str(path) + '"').encode())
+                # Startup fullscreen, overlay expiry, and both resize directions
+                # must contain the picture within the entire new character grid.
+                for columns, rows, minimum in [(100, 32, 620), (160, 24, 460), (60, 40, 580)]:
+                    start = len(terminal.data)
+                    terminal.resize(columns, rows)
+                    def contains_full_picture(data):
+                        rasters = re.findall(rb'"1;1;(\d+);(\d+)', data[start:])
+                        for width, height in rasters:
+                            width, height = int(width), int(height)
+                            assert width <= columns * 10 and height <= rows * 20, "Image exceeds fullscreen grid"
+                            if min(width, height) >= minimum:
+                                return True
+                        return False
+                    terminal.wait_for(contains_full_picture)
+                start = len(terminal.data)
+                terminal.send(b"\x1b")
+                terminal.wait_for(lambda data: b"Media" in data[start:] and b"Playback" in data[start:])
             terminal.send(b"q")
             assert terminal.k.WaitForSingleObject(terminal.process, 10000) == 0, "Quit key was lost after probing"
             code = W.DWORD()
@@ -235,7 +262,8 @@ def smoke(binary, mode="sixel", host=None, startup_timeout=20):
             assert code.value == 0, f"Player failed with exit code {code.value}"
             assert b"\x1b[?1049l" in terminal.data, "Alternate screen was not restored"
             checked = (
-                "menu hover and header switching" if mode == "menu-hover"
+                "fullscreen startup, resize containment and Escape" if mode == "fullscreen"
+                else "menu hover and header switching" if mode == "menu-hover"
                 else "dropped Sixel artwork" if mode == "sixel"
                 else "fallback and startup input"
             )
@@ -259,7 +287,7 @@ if __name__ == "__main__":
             os.close(outgoing)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=Path)
-    parser.add_argument("--mode", choices=["sixel", "no-sixel", "timeout", "menu-hover"], default="sixel")
+    parser.add_argument("--mode", choices=["sixel", "no-sixel", "timeout", "menu-hover", "fullscreen"], default="sixel")
     parser.add_argument("--host-directory", type=Path,
                         help="Download checksum-pinned modern Microsoft ConPTY into this test directory")
     parser.add_argument("--startup-timeout", type=float, default=20,

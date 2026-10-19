@@ -20,6 +20,7 @@ pub struct Options {
     pub fps: u32,
     pub decode_height: u32,
     pub native_window: bool,
+    pub fullscreen: bool,
     pub audio_output: AudioOutput,
     pub audio_endpoint: Option<String>,
     pub audio_token_file: Option<String>,
@@ -52,6 +53,7 @@ impl Options {
             fps: 60,
             decode_height: 1080,
             native_window: false,
+            fullscreen: false,
             audio_output: AudioOutput::Auto,
             audio_endpoint: None,
             audio_token_file: None,
@@ -90,6 +92,7 @@ impl Options {
                         | "--silent"
                         | "--audio"
                         | "--native-window"
+                        | "--fullscreen"
                         | "--shuffle"
                         | "--no-kitty-compression"
                 )
@@ -115,6 +118,7 @@ impl Options {
                 "--audio-endpoint" => out.audio_endpoint = Some(value()?),
                 "--audio-token-file" => out.audio_token_file = Some(value()?),
                 "--native-window" => out.native_window = true,
+                "--fullscreen" => out.fullscreen = true,
                 "--shuffle" => out.shuffle = true,
                 "--metrics" => out.metrics = Some(value()?),
                 "--playlist" => out.playlist = Some(value()?),
@@ -371,5 +375,20 @@ mod tests {
         let options = parse(&["--smoke-test", "--", "-movie.mp4"], false).unwrap();
         assert_eq!(options.media.as_deref(), Some("-movie.mp4"));
         assert_eq!(options.audio_output, AudioOutput::Disabled);
+    }
+    #[test]
+    fn fullscreen_startup_is_explicit_and_rejects_inline_boolean_values() {
+        assert!(!parse(&[], false).unwrap().fullscreen);
+        assert!(
+            parse(&["--fullscreen", "movie.mp4"], false)
+                .unwrap()
+                .fullscreen
+        );
+        assert!(
+            parse(&["--ssh", "--fullscreen", "movie.mp4"], false)
+                .unwrap()
+                .fullscreen
+        );
+        assert!(parse(&["--fullscreen=false"], false).is_err());
     }
 }

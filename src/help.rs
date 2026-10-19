@@ -27,6 +27,7 @@ Usage: vlc-tty [OPTIONS] [FILE|FOLDER|URL]\n\n\
   --rate N              Initial speed, 0.25–4 (default: 1)\n\
   --metrics PATH        Record server profiling JSONL to a new file\n\
   --native-window       Separate video window, local desktop only\n\
+  --fullscreen          Start fullscreen; request local Windows Terminal fullscreen\n\
   --doctor              Print runtime/session diagnostics without a TUI\n\
   --smoke-test MEDIA    Require decoded frames and an advancing clock\n\
   --                    End options, including for paths starting with -\n\n\

@@ -42,6 +42,7 @@ vlc-tty --graphics ansi movie.mp4
 vlc-tty --playlist favourites.m3u8 --shuffle --repeat all
 vlc-tty --playlist favourites.m3u8 --export-playlist copy.m3u8
 vlc-tty --volume 80 --rate 1.25 movie.mp4
+vlc-tty --fullscreen movie.mp4
 vlc-tty --help
 ```
 
@@ -80,7 +81,7 @@ The smoke check requires decoded frames and an advancing playback clock, without
 | --- | --- |
 | `Space` / `s` | Play or pause / stop |
 | `←` / `→` | Seek backward / forward 10 seconds |
-| `f` / `Esc` | Fullscreen layout / return |
+| `f` / `Esc` | Fullscreen / return |
 | `+` / `-` / `m` | Volume / mute (local or server audio) |
 | `[` / `]` / `=` | Slower / faster / normal speed |
 | `e` | Next frame |
@@ -92,7 +93,7 @@ The smoke check requires decoded frames and an advancing playback clock, without
 | `g` | Toggle pixel graphics / ANSI fallback |
 | `?` / `i` / `q` | Help / media information / quit |
 
-Mouse controls and menus are available where terminal mouse reporting is supported. Hover highlights menu headers and dropdown rows; with a menu open, moving across headers switches menus. Commands activate on click or Enter. Fullscreen changes the application layout. Use the terminal's own controls for OS-window fullscreen.
+Mouse controls and menus are available where terminal mouse reporting is supported. Hover highlights menu headers and dropdown rows; with a menu open, moving across headers switches menus. Commands activate on click or Enter. Fullscreen also requests local Windows Terminal window fullscreen through its default F11 binding, with geometry confirmation and restoration on exit. Other hosts and server-side SSH playback use the terminal's own fullscreen shortcut; see the [fullscreen guide](docs/WINDOWS-TERMINAL.md).
 
 For outer borders in Windows Terminal, set profile padding to `0` and hide its scrollbar; see the [terminal appearance guide](docs/WINDOWS-TERMINAL.md). Artwork/video keeps its aspect ratio, so differently shaped media can still have black bars.
 

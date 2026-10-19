@@ -850,7 +850,8 @@ pub fn draw(
         zones.back = Some(Rect::new(screen.x, screen.y, 16.min(screen.width), 1));
 
         if image.is_some() && !native_window {
-            let picture_area = if app.is_audio() && content_area.height >= 6 {
+            let show_audio_meta = app.is_audio() && app.show_osd() && content_area.height >= 6;
+            let picture_area = if show_audio_meta {
                 Rect::new(
                     content_area.x,
                     content_area.y,
@@ -861,7 +862,7 @@ pub fn draw(
                 content_area
             };
             video(f, image, graphics, picture_area, has_active_popup);
-            if app.is_audio() && content_area.height >= 6 {
+            if show_audio_meta {
                 render_audio_meta_banner(f, app, content_area);
             }
         } else if native_window {
@@ -1283,10 +1284,18 @@ mod tests {
     fn fullscreen_without_visible_overlays_reaches_every_terminal_edge() {
         use crate::graphics::{GraphicsChoice, GraphicsRenderer};
         use ratatui::{backend::TestBackend, Terminal};
-        for (width, height) in [(80, 24), (101, 33), (24, 8)] {
+        for (width, height, audio) in [
+            (80, 24, false),
+            (101, 33, false),
+            (24, 8, false),
+            (80, 24, true),
+            (101, 33, true),
+            (24, 8, true),
+        ] {
             let screen = Rect::new(0, 0, width, height);
             assert_eq!(fullscreen_content_area(screen, false, false), screen);
             let mut app = App::new(None);
+            app.current = audio.then(|| "audio.mp3".to_owned());
             app.toggle_fullscreen();
             let image = VideoFrame {
                 width: width as usize,

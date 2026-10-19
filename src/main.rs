@@ -3,6 +3,7 @@ mod audio;
 mod dialogs;
 mod graphics;
 mod help;
+mod host_fullscreen;
 mod input;
 mod latest;
 mod metadata;
@@ -273,6 +274,7 @@ fn run() -> Result<()> {
     }
     let initial = opts.media.as_deref().filter(|s| !s.contains("://"));
     let mut app = App::new(initial.map(Path::new));
+    app.fullscreen = opts.fullscreen;
     app.native_dialogs = !opts.ssh;
     app.volume = opts.volume;
     player.set_volume(opts.volume);
@@ -313,6 +315,9 @@ fn run() -> Result<()> {
         app.notify("SSH audio disabled: use vlc-tty connect on your local computer");
     }
     let mut zones = HitZones::default();
+    let mut host_fullscreen = host_fullscreen::Controller::new(host_fullscreen::NativeHost::new(
+        !opts.ssh && !opts.native_window,
+    ));
     let mut previous_presentation = (
         app.fullscreen,
         app.media_revision,
@@ -366,6 +371,9 @@ fn run() -> Result<()> {
             }
             {
                 for event in events {
+                    if host_fullscreen.is_forwarded_key(&event) {
+                        continue;
+                    }
                     if matches!(event, Event::Resize(_, _)) {
                         reset_fullscreen(&mut terminal)?;
                         graphics.invalidate();
@@ -384,6 +392,12 @@ fn run() -> Result<()> {
             }
         }
         app.tick(&mut player);
+        if let Some(message) = host_fullscreen.update(app.fullscreen, Instant::now()) {
+            app.notify(message);
+        }
+        if host_fullscreen.take_external_exit() && app.fullscreen {
+            app.toggle_fullscreen();
+        }
         let presentation = (
             app.fullscreen,
             app.media_revision,
