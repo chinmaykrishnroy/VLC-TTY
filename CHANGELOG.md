@@ -2,6 +2,8 @@
 
 ## 0.0.1 (first public version, in development)
 
+- Fit Sixel video to the widget's current pixel dimensions while adapting quantization detail to measured encoder/backend costs. Scale palette indices directly, retain the static artwork path, and include output work in the FPS interval.
+- Add bounded native Windows playback probes for dropped local files and Pi-stream transitions, plus request-to-backend age and working-pixel metrics.
 - Highlight menu headers and dropdown rows on mouse hover; switch open menus across headers without activating commands, and reject clicks on stale dropdown layouts.
 - Negotiate Kitty zlib compression through the bounded terminal probe, preserving raw inline transfer when unsupported; add `--no-kitty-compression` for lower CPU cost. Verify lossless pixels and Windows reply/input handling.
 - Exercise actual keyboard/help probes in short ARM64 pixel smoke checks while preserving their frame minimum; add explicit compressed-protocol emulation for reproducible encoder measurements.

@@ -14,6 +14,7 @@ mod queue;
 mod remote;
 mod remote_file;
 mod renderer;
+mod sixel_video;
 mod subtitles;
 mod terminal_probe;
 mod termination;
@@ -398,10 +399,12 @@ fn run() -> Result<()> {
             graphics.invalidate();
             previous_presentation = presentation;
         }
+        let video_frame = player.latest_frame();
+        let motion = video_frame.is_some();
         let mut frame = if opts.native_window {
             None
         } else {
-            player.latest_frame().or_else(|| app.audio_thumbnail())
+            video_frame.or_else(|| app.audio_thumbnail())
         };
         if let Some((generation, paused, delay)) = player.audio_delay_state() {
             frame = video_delay.select(
@@ -416,7 +419,7 @@ fn run() -> Result<()> {
             && app.active_menu.is_none()
             && app.input.is_none()
         {
-            graphics.prepare(frame.clone());
+            graphics.prepare(frame.clone(), motion);
         }
         if last_draw.elapsed() >= interval {
             let info = player.snapshot();
@@ -433,6 +436,7 @@ fn run() -> Result<()> {
                 )
             })?;
             drop(sync_update);
+            graphics.observe_draw(draw_started.elapsed());
             let drawn = graphics.take_drawn();
             if let Some(recorder) = &mut recorder {
                 recorder.record(
@@ -444,7 +448,9 @@ fn run() -> Result<()> {
                     player.audio_metrics(),
                 )?;
             }
-            last_draw = Instant::now();
+            // The limit measures start-to-start cadence. Encoding/output work
+            // already consumed part (or all) of this interval.
+            last_draw = draw_started;
         }
     }
 }

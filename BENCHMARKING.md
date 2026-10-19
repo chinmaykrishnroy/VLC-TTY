@@ -40,6 +40,19 @@ Use the same options on a physical device. Synthetic loops exercise repeat trans
 
 Results include application metrics, per-second resource samples, a summary, and a bounded diagnostic tail. The summary compares median rates and latency before and after 5,000 frames when enough samples exist. It does not infer success from the requested FPS. A short smoke run cannot establish movie-length stability.
 
+## Native Windows dropped-file probe
+
+Use an optimized executable and an existing local video. The probe opens a private modern ConPTY at 188 by 50 cells, drops the file, measures steady backend submissions, opens/closes help and requires clean exit/restoration. Capture memory is bounded; media stays on this machine. Every output directory must be new.
+
+```powershell
+python scripts/windows_playback_probe.py target/x86_64-pc-windows-msvc/release/vlc-tty.exe movie.mkv --runtime-home path/to/runtime --output target/probe-local
+python scripts/windows_playback_probe.py dist/vlc-tty-0.0.1-windows-x64.exe movie.mkv --initial-stream roy@pi '/home/roy/Music/song.mp3' --audio-clock --output target/probe-transition
+```
+
+`--audio-clock` enables local audio decoding at volume zero; without it the child uses `--silent`. This tests the local audio-clock path without playing sound, and cannot establish audible lip sync. The default gate requires at least 12 backend submissions/sec, help within 500 ms, no encoder failures and clean terminal restoration. `--duration`, `--columns`, `--rows`, `--minimum-fps` and `--maximum-input-latency` are explicit measurement controls. Cold portable extraction is included in UI startup, separately from the file-drop delay.
+
+Sixel video quantizes a sampled working image (initial budget 640x360, bounded between 320x180 and 1280x720) and expands palette-index runs to the actual widget pixels. The working image never exceeds the widget or source image. Slow encode/output reduces the budget quickly; sixty consecutive fast encodes allow gradual recovery. This trades spatial detail for motion, retains 256 palette entries, and leaves static album covers on their existing encoder. Resize results still use generation checks. `work_pixel_budget` reports the ceiling, not an assertion of the actual sampled dimensions. `request_to_backend_recent_p95_us` measures encoding-request age at backend completion; it excludes time before enqueueing and client presentation.
+
 ## What this does not measure
 
 A drained PTY is not a terminal graphics client. These tests exercise decoding, conversion, encoding, and server writes, including forced pixel protocols. They do not measure client-visible FPS, image quality, SSH wire throughput, display latency, or audible A/V synchronization.

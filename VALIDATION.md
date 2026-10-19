@@ -1,5 +1,9 @@
 # Validation — 17 October 2026
 
+## Local Windows video regression — 19 October 2026
+
+The exact dropped HEVC movie reproduced the reported low frame rate. Widget-sized Sixel output with adaptive sampled quantization reduced measured encoding time substantially; native-console default playback reached 20.2 backend submissions/sec. The exact Pi-stream transition with a muted local audio clock reached 15.9/sec and retained responsive help and clean shutdown. These are backend measurements, not visible FPS or audible synchronization certification. Read the [video performance report](docs/WINDOWS-VIDEO-PERFORMANCE.md) for baselines, test conditions and remaining cold-start limits.
+
 ## Graphics follow-up — 19 October 2026
 
 Kitty compression negotiation and its compatibility fallback are covered by lossless payload, capability and Windows reply regressions. The Windows suite passes 94 deterministic Rust tests, five explicit LibVLC runtime checks, strict Clippy with and without the audio client, thirteen Python tooling tests (one additional POSIX-only test is skipped on Windows), and actionlint.

@@ -61,11 +61,13 @@ struct EncodeRequest {
     frame: Arc<VideoFrame>,
     area: Size,
     queued_at: Instant,
+    motion: bool,
 }
 struct EncodeResult {
     generation: u64,
     serial: u64,
     area: Size,
+    queued_at: Instant,
     result: Result<Protocol, String>,
 }
 
@@ -76,6 +78,7 @@ pub struct GraphicsRenderer {
     responses: latest::Receiver<EncodeResult>,
     current: Option<Protocol>,
     current_serial: u64,
+    current_requested_at: Option<Instant>,
     area: Size,
     generation: u64,
     last_submitted: Option<(u64, u64, Size)>,
@@ -87,6 +90,8 @@ pub struct GraphicsRenderer {
     is_tmux: bool,
     metrics: Option<Arc<EncoderMetrics>>,
     encode_latency_us: Arc<std::sync::atomic::AtomicU64>,
+    draw_latency_us: Arc<std::sync::atomic::AtomicU64>,
+    feedback_frame: Option<(u64, u64)>,
     drawn: Option<(u64, u64)>,
     startup_events: std::collections::VecDeque<ratatui::crossterm::event::Event>,
 }
@@ -120,13 +125,29 @@ impl GraphicsRenderer {
         let worker_metrics = metrics.clone();
         let encode_latency_us = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let worker_latency = encode_latency_us.clone();
+        let draw_latency_us = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let worker_draw_latency = draw_latency_us.clone();
         thread::spawn(move || {
+            let mut budget = crate::sixel_video::VideoBudget::default();
             while let Some(req) = requests.recv() {
                 let started = Instant::now();
                 if let Some(metrics) = &worker_metrics {
                     metrics.queue_wait.observe(req.queued_at.elapsed());
+                    if req.motion {
+                        metrics
+                            .work_pixel_budget
+                            .store(budget.pixels() as u64, Ordering::Relaxed);
+                    }
                 }
-                let result = if protocol_kind == ProtocolType::Sixel {
+                let result = if protocol_kind == ProtocolType::Sixel && req.motion {
+                    crate::sixel_video::encode(
+                        &req.frame,
+                        req.area,
+                        font_size,
+                        is_tmux,
+                        budget.pixels(),
+                    )
+                } else if protocol_kind == ProtocolType::Sixel {
                     encode_sixel_fast(&req.frame, req.area, font_size, is_tmux)
                 } else {
                     encode_pixels(
@@ -139,6 +160,14 @@ impl GraphicsRenderer {
                         compress,
                     )
                 };
+                if req.motion {
+                    budget.observe(
+                        started.elapsed().max(Duration::from_micros(
+                            worker_draw_latency.load(Ordering::Relaxed),
+                        )),
+                        Duration::from_millis(1000 / max_fps.clamp(1, 120) as u64),
+                    );
+                }
                 worker_latency.store(started.elapsed().as_micros() as u64, Ordering::Relaxed);
                 if let Some(metrics) = &worker_metrics {
                     metrics.encode.observe(started.elapsed());
@@ -152,6 +181,7 @@ impl GraphicsRenderer {
                     generation: req.generation,
                     serial: req.frame.serial,
                     area: req.area,
+                    queued_at: req.queued_at,
                     result,
                 };
                 match response_tx.replace(result) {
@@ -172,6 +202,7 @@ impl GraphicsRenderer {
             responses,
             current: None,
             current_serial: 0,
+            current_requested_at: None,
             area: Size::default(),
             generation: 0,
             last_submitted: None,
@@ -183,6 +214,8 @@ impl GraphicsRenderer {
             is_tmux,
             metrics,
             encode_latency_us,
+            draw_latency_us,
+            feedback_frame: None,
             drawn: None,
             startup_events,
         }
@@ -206,6 +239,7 @@ impl GraphicsRenderer {
         self.request_tx.clear();
         self.current = None;
         self.current_serial = 0;
+        self.current_requested_at = None;
         self.area = Size::default();
         self.last_request_at = Instant::now() - Duration::from_secs(1);
     }
@@ -250,7 +284,7 @@ impl GraphicsRenderer {
         }
     }
 
-    pub fn prepare(&mut self, frame: Option<Arc<VideoFrame>>) {
+    pub fn prepare(&mut self, frame: Option<Arc<VideoFrame>>, motion: bool) {
         if let Some(completed) = self.responses.try_take().filter(|completed| {
             let valid = completed.generation == self.generation && completed.area == self.area;
             if !valid {
@@ -265,6 +299,7 @@ impl GraphicsRenderer {
                     if completed.area == self.area {
                         self.current = Some(proto);
                         self.current_serial = completed.serial;
+                        self.current_requested_at = Some(completed.queued_at);
                     }
                 }
                 Err(e) => {
@@ -291,6 +326,7 @@ impl GraphicsRenderer {
                 frame,
                 area: self.area,
                 queued_at: Instant::now(),
+                motion,
             }) {
                 Ok(replaced) => {
                     if let Some(metrics) = &self.metrics {
@@ -345,6 +381,16 @@ impl GraphicsRenderer {
     pub fn take_drawn(&mut self) -> Option<(u64, u64)> {
         self.drawn.take()
     }
+    pub fn observe_draw(&mut self, elapsed: Duration) {
+        if self.drawn.is_some() && self.drawn != self.feedback_frame {
+            if let (Some(metrics), Some(requested)) = (&self.metrics, self.current_requested_at) {
+                metrics.request_to_backend.observe(requested.elapsed());
+            }
+            self.draw_latency_us
+                .store(elapsed.as_micros() as u64, Ordering::Relaxed);
+            self.feedback_frame = self.drawn;
+        }
+    }
 }
 
 impl Drop for GraphicsRenderer {
@@ -357,7 +403,7 @@ fn tmux_wrap(payload: &str) -> String {
     format!("\x1bPtmux;{}\x1b\\", payload.replace('\x1b', "\x1b\x1b"))
 }
 
-fn bounded_area(area: Size, font: FontSize) -> Result<Size, String> {
+pub(crate) fn bounded_area(area: Size, font: FontSize) -> Result<Size, String> {
     if area.width == 0
         || area.height == 0
         || font.width == 0
@@ -648,10 +694,11 @@ mod tests {
                 generation: old_generation,
                 serial: 7,
                 area: size,
+                queued_at: Instant::now(),
                 result: Ok(test_sixel())
             })
             .is_ok());
-        renderer.prepare(None);
+        renderer.prepare(None, true);
         assert!(
             renderer.current.is_none(),
             "A completed frame from before invalidation must not reappear"

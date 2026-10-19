@@ -43,7 +43,7 @@ def prepare_host(directory):
 
 
 class Console:
-    def __init__(self, command, library=None, mode="sixel"):
+    def __init__(self, command, library=None, mode="sixel", columns=100, rows=32):
         k = self.k = C.WinDLL("kernel32", use_last_error=True)
         self.host = C.WinDLL(str(library.resolve()), use_last_error=True) if library else k
         class Coord(C.Structure):
@@ -84,7 +84,7 @@ class Console:
             if not k.CreatePipe(C.byref(read), C.byref(write), None, 0):
                 raise C.WinError(C.get_last_error())
         self.console = W.HANDLE()
-        if self.create_console(Coord(100, 32), input_read, output_write, 0, C.byref(self.console)) != 0:
+        if self.create_console(Coord(columns, rows), input_read, output_write, 0, C.byref(self.console)) != 0:
             raise RuntimeError("CreatePseudoConsole failed")
         size = C.c_size_t()
         k.InitializeProcThreadAttributeList(None, 1, 0, C.byref(size))
@@ -244,13 +244,14 @@ def smoke(binary, mode="sixel", host=None):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--console-child":
+    if len(sys.argv) > 1 and sys.argv[1] in {"--console-child", "--console-child-audio"}:
         # Open read/write console handles: cmd's write-only CONOUT$ handle
         # fails GetConsoleMode and Rust's IsTerminal check.
         incoming = os.open("CONIN$", os.O_RDWR | os.O_BINARY)
         outgoing = os.open("CONOUT$", os.O_RDWR | os.O_BINARY)
         try:
-            raise SystemExit(subprocess.call([sys.argv[2], *sys.argv[3:], "--silent"], stdin=incoming,
+            audio = ["--audio", "--volume", "0"] if sys.argv[1] == "--console-child-audio" else ["--silent"]
+            raise SystemExit(subprocess.call([sys.argv[2], *sys.argv[3:], *audio], stdin=incoming,
                                               stdout=outgoing, stderr=outgoing))
         finally:
             os.close(incoming)
