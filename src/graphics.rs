@@ -587,7 +587,7 @@ mod tests {
         };
         for noisy in [false, true] {
             let mut seed = 1234567u32;
-            for (i, px) in frame.bgra.chunks_exact_mut(4).enumerate() {
+            for (i, px) in frame.bgra.as_chunks_mut::<4>().0.iter_mut().enumerate() {
                 seed ^= seed << 13;
                 seed ^= seed >> 17;
                 seed ^= seed << 5;
