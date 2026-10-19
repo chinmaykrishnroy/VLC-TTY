@@ -112,7 +112,8 @@ class Console:
             k.DeleteProcThreadAttributeList(attrs)
             k.CloseHandle(input_read)
             k.CloseHandle(output_write)
-        self.data = bytearray()
+        self._data = bytearray()
+        self._data_lock = threading.Lock()
         self.cursor_queries = 0
         self.mode = mode
         self.answered = {}
@@ -123,7 +124,15 @@ class Console:
         buffer = C.create_string_buffer(65536)
         size = W.DWORD()
         while self.k.ReadFile(self.output, buffer, len(buffer), C.byref(size), None) and size.value:
-            self.data.extend(buffer.raw[:size.value])
+            with self._data_lock:
+                self._data.extend(buffer.raw[:size.value])
+
+    @property
+    def data(self):
+        # Readers receive a stable snapshot while the pipe thread appends.
+        # Python may release the GIL while copying/scanning large buffers.
+        with self._data_lock:
+            return bytes(self._data)
 
     def send(self, data):
         size = W.DWORD()
@@ -179,7 +188,7 @@ def fixture(folder):
 
 
 def smoke(binary, mode="sixel", host=None):
-    for name in ["TERM_PROGRAM", "TERM", "KITTY_WINDOW_ID"]:
+    for name in ["TERM_PROGRAM", "TERM", "KITTY_WINDOW_ID", "NO_COLOR"]:
         os.environ.pop(name, None)
     with tempfile.TemporaryDirectory(prefix="vlc-tty-art-") as temporary:
         path = fixture(Path(temporary))
@@ -203,13 +212,32 @@ def smoke(binary, mode="sixel", host=None):
                 terminal.wait_for(lambda data: b"KEYBOARD CONTROLS" in data)
                 assert b"ANSI half-block" in terminal.data, "Unanswered query did not retain ANSI fallback"
                 terminal.send(b"\x1b")
+            elif mode == "menu-hover":
+                terminal.wait_for(lambda data: b"ANSI half-block" in data)
+                start = len(terminal.data)
+                terminal.send(b"\x1b[<35;12;1M")
+                terminal.wait_for(lambda data: b"48;2;48;54;62" in data[start:])
+                assert b"Play / Pause" not in terminal.data[start:], "Closed menu opened on hover"
+                terminal.send(b"\x1b[<0;12;1M\x1b[<0;12;1m")
+                terminal.wait_for(lambda data: b"Play / Pause" in data[start:])
+                start = len(terminal.data)
+                terminal.send(b"\x1b[<35;12;4M")
+                terminal.wait_for(lambda data: b"48;2;74;203;216" in data[start:] and b"Stop" in data[start:])
+                start = len(terminal.data)
+                terminal.send(b"\x1b[<35;22;1M")
+                terminal.wait_for(lambda data: b"Cycle Audio Track" in data[start:] and b"Volume Up" in data[start:])
+                terminal.send(b"\x1b")
             terminal.send(b"q")
             assert terminal.k.WaitForSingleObject(terminal.process, 10000) == 0, "Quit key was lost after probing"
             code = W.DWORD()
             terminal.k.GetExitCodeProcess(terminal.process, C.byref(code))
             assert code.value == 0, f"Player failed with exit code {code.value}"
             assert b"\x1b[?1049l" in terminal.data, "Alternate screen was not restored"
-            checked = "dropped Sixel artwork" if mode == "sixel" else "fallback and startup input"
+            checked = (
+                "menu hover and header switching" if mode == "menu-hover"
+                else "dropped Sixel artwork" if mode == "sixel"
+                else "fallback and startup input"
+            )
             print(f"Windows console graphics smoke passed: {mode}; {checked}, quit and terminal restoration")
         finally:
             terminal.close()
@@ -229,7 +257,7 @@ if __name__ == "__main__":
             os.close(outgoing)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=Path)
-    parser.add_argument("--mode", choices=["sixel", "no-sixel", "timeout"], default="sixel")
+    parser.add_argument("--mode", choices=["sixel", "no-sixel", "timeout", "menu-hover"], default="sixel")
     parser.add_argument("--host-directory", type=Path,
                         help="Download checksum-pinned modern Microsoft ConPTY into this test directory")
     args = parser.parse_args()

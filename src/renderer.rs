@@ -2,7 +2,7 @@
 //! Implements VLC Desktop layout: top menu bar, full-width player/welcome canvas,
 //! timeline slider, VLC controls toolbar with clean text buttons, and non-overlapping overlays.
 use crate::{
-    app::{App, HitZones, InputPurpose, MenuKind, Overlay, ViewMode},
+    app::{App, HitZones, InputPurpose, MenuDropdown, MenuKind, Overlay, ViewMode},
     graphics::GraphicsRenderer,
     vlc::{PlaybackSnapshot, VideoFrame},
 };
@@ -524,7 +524,7 @@ fn browser(f: &mut Frame, app: &App, area: Rect, zones: &mut HitZones) {
 // ──────────────────────────────────────────────────────────────────────
 fn render_menu_bar(f: &mut Frame, area: Rect, app: &App, zones: &mut HitZones) {
     zones.menu_bar.clear();
-    let mut x = area.x + 1;
+    let mut x = area.x;
     let mut spans = Vec::new();
 
     for &menu in MenuKind::ALL {
@@ -536,6 +536,11 @@ fn render_menu_bar(f: &mut Frame, area: Rect, app: &App, zones: &mut HitZones) {
             Style::default()
                 .fg(Color::Black)
                 .bg(ORANGE)
+                .add_modifier(Modifier::BOLD)
+        } else if app.hovered_menu == Some(menu) {
+            Style::default()
+                .fg(ORANGE)
+                .bg(Color::Rgb(48, 54, 62))
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(PALE)
@@ -631,7 +636,11 @@ fn render_menu_dropdown(f: &mut Frame, app: &App, zones: &mut HitZones) {
             );
         }
     }
-    zones.menu_dropdown = Some((dropdown_rect, hit_items));
+    zones.menu_dropdown = Some(MenuDropdown {
+        menu,
+        area: dropdown_rect,
+        items: hit_items,
+    });
 }
 
 fn overlay(

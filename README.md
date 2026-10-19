@@ -91,7 +91,7 @@ The smoke check requires decoded frames and an advancing playback clock, without
 | `g` | Toggle pixel graphics / ANSI fallback |
 | `?` / `i` / `q` | Help / media information / quit |
 
-Mouse controls and menus are available where terminal mouse reporting is supported. Fullscreen changes the application layout. Use the terminal's own controls for OS-window fullscreen.
+Mouse controls and menus are available where terminal mouse reporting is supported. Hover highlights menu headers and dropdown rows; with a menu open, moving across headers switches menus. Commands activate on click or Enter. Fullscreen changes the application layout. Use the terminal's own controls for OS-window fullscreen.
 
 For outer borders in Windows Terminal, set profile padding to `0` and hide its scrollbar; see the [terminal appearance guide](docs/WINDOWS-TERMINAL.md). Artwork/video keeps its aspect ratio, so differently shaped media can still have black bars.
 

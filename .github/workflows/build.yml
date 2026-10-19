@@ -73,6 +73,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/windows_graphics_smoke.py $player --mode timeout --host-directory target/graphics-test-host
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/windows_graphics_smoke.py $player --mode menu-hover --host-directory target/graphics-test-host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/windows_graphics_smoke.py $player --mode no-sixel
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build standalone executable with matching runtime and sources

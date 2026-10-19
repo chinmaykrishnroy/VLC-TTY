@@ -150,6 +150,13 @@ impl MenuKind {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct MenuDropdown {
+    pub menu: MenuKind,
+    pub area: Rect,
+    pub items: Vec<(Rect, usize)>,
+}
+
 #[derive(Default, Clone, Debug)]
 pub struct HitZones {
     pub back: Option<Rect>,
@@ -168,7 +175,7 @@ pub struct HitZones {
     pub track_list: Option<(Rect, usize)>,
     pub overlay_box: Option<Rect>,
     pub menu_bar: Vec<(Rect, MenuKind)>,
-    pub menu_dropdown: Option<(Rect, Vec<(Rect, usize)>)>,
+    pub menu_dropdown: Option<MenuDropdown>,
 }
 
 fn hit(area: Option<Rect>, x: u16, y: u16) -> bool {
@@ -217,6 +224,7 @@ pub struct App {
     pub last_file_click: Option<(Instant, usize)>,
     pub last_video_click: Option<Instant>,
     pub active_menu: Option<MenuKind>,
+    pub hovered_menu: Option<MenuKind>,
     pub menu_selected: usize,
     pub audio_metadata: Option<crate::metadata::AudioMetadata>,
     metadata_poll_at: Instant,
@@ -246,12 +254,17 @@ impl App {
         use ratatui::crossterm::event::{Event, KeyEventKind};
         match event {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
+                self.hovered_menu = None;
                 if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
                     return Ok(AppEffect::Quit);
                 }
                 self.handle_key(key, player)
             }
             Event::Mouse(mouse) => self.handle_mouse(mouse, zones, player),
+            Event::FocusLost | Event::Resize(_, _) => {
+                self.hovered_menu = None;
+                Ok(AppEffect::Continue)
+            }
             Event::Paste(text) => {
                 if let Err(error) = self.handle_drop_or_paste(&text, player) {
                     self.notify(format!("Open error: {error:#}"));
@@ -306,6 +319,7 @@ impl App {
             last_file_click: None,
             last_video_click: None,
             active_menu: None,
+            hovered_menu: None,
             menu_selected: 0,
             audio_metadata: None,
             metadata_poll_at: Instant::now() - Duration::from_secs(1),
@@ -1425,7 +1439,42 @@ impl App {
         player: &mut dyn Playback,
     ) -> Result<AppEffect> {
         let (x, y) = (evt.column, evt.row);
+        self.hovered_menu = None;
         if self.input.is_some() {
+            return Ok(AppEffect::Continue);
+        }
+
+        if !self.fullscreen && self.overlay == Overlay::None {
+            self.hovered_menu = zones
+                .menu_bar
+                .iter()
+                .find(|(rect, _)| hit(Some(*rect), x, y))
+                .map(|(_, menu)| *menu);
+        }
+        if evt.kind == MouseEventKind::Moved {
+            if self.fullscreen || self.overlay != Overlay::None {
+                return Ok(AppEffect::Continue);
+            }
+            if let Some(menu) = self.hovered_menu {
+                // Highlight closed headers; switch only when a dropdown is open.
+                if self.active_menu.is_some() && self.active_menu != Some(menu) {
+                    self.active_menu = Some(menu);
+                    self.menu_selected = 0;
+                }
+            } else if let Some(MenuDropdown {
+                menu: rendered_menu,
+                items,
+                ..
+            }) = &zones.menu_dropdown
+            {
+                if self.active_menu == Some(*rendered_menu) {
+                    if let Some((_, index)) = items.iter().find(|(rect, _)| hit(Some(*rect), x, y))
+                    {
+                        self.menu_selected = *index;
+                    }
+                }
+            }
+            // Motion never activates media actions, sliders or menu commands.
             return Ok(AppEffect::Continue);
         }
 
@@ -1445,8 +1494,18 @@ impl App {
         }
 
         // 2. Click inside open dropdown menu
-        if let Some((dropdown_box, ref items)) = zones.menu_dropdown {
+        if let Some(MenuDropdown {
+            menu: rendered_menu,
+            area: dropdown_box,
+            items,
+        }) = &zones.menu_dropdown
+        {
             if matches!(evt.kind, MouseEventKind::Down(MouseButton::Left)) {
+                // Input can arrive between switching headers and the next draw.
+                // Never interpret old dropdown rows as commands in the new menu.
+                if self.active_menu != Some(*rendered_menu) {
+                    return Ok(AppEffect::Continue);
+                }
                 if let Some(menu) = self.active_menu {
                     for (item_rect, idx) in items {
                         if hit(Some(*item_rect), x, y) {
@@ -1455,7 +1514,7 @@ impl App {
                     }
                 }
                 // If clicked outside dropdown box, dismiss it
-                if !hit(Some(dropdown_box), x, y) {
+                if !hit(Some(*dropdown_box), x, y) {
                     self.active_menu = None;
                     return Ok(AppEffect::Continue);
                 }
@@ -1876,7 +1935,11 @@ mod tests {
         ] {
             app.active_menu = Some(menu);
             let zones = HitZones {
-                menu_dropdown: Some((rect, vec![(rect, index)])),
+                menu_dropdown: Some(MenuDropdown {
+                    menu,
+                    area: rect,
+                    items: vec![(rect, index)],
+                }),
                 ..Default::default()
             };
             assert_eq!(
@@ -1884,6 +1947,171 @@ mod tests {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn menu_hover_renders_highlights_without_activating_commands_and_keeps_keyboard_navigation() {
+        use crate::graphics::{GraphicsChoice, GraphicsRenderer};
+        use ratatui::{backend::TestBackend, crossterm::event::Event, style::Color, Terminal};
+        let mut app = App::new(None);
+        let mut player = FakePlayback {
+            state: 3,
+            ..Default::default()
+        };
+        let mut terminal = Terminal::new(TestBackend::new(100, 32)).unwrap();
+        let mut graphics = GraphicsRenderer::new(GraphicsChoice::Ansi, 60, None, true);
+        let mut zones = HitZones::default();
+        terminal
+            .draw(|f| {
+                zones =
+                    crate::renderer::draw(f, &app, &player.snapshot(), None, &mut graphics, false)
+            })
+            .unwrap();
+        let header = zones
+            .menu_bar
+            .iter()
+            .find(|(_, m)| *m == MenuKind::Playback)
+            .unwrap()
+            .0;
+        let motion = |x, y| {
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Moved,
+                column: x,
+                row: y,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        app.handle_event(motion(header.x + 1, header.y), &zones, &mut player)
+            .unwrap();
+        assert_eq!(app.hovered_menu, Some(MenuKind::Playback));
+        assert_eq!(
+            app.active_menu, None,
+            "hovering a closed header must not open it"
+        );
+        terminal
+            .draw(|f| {
+                zones =
+                    crate::renderer::draw(f, &app, &player.snapshot(), None, &mut graphics, false)
+            })
+            .unwrap();
+        assert_eq!(
+            terminal.backend().buffer()[(header.x + 1, header.y)].bg,
+            Color::Rgb(48, 54, 62)
+        );
+        assert_eq!(
+            terminal.backend().buffer()[(header.right() - 1, header.y)].bg,
+            Color::Rgb(48, 54, 62),
+            "the full hover hitbox must match the painted header"
+        );
+        app.handle_event(
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: header.x + 1,
+                row: header.y,
+                modifiers: KeyModifiers::NONE,
+            }),
+            &zones,
+            &mut player,
+        )
+        .unwrap();
+        terminal
+            .draw(|f| {
+                zones =
+                    crate::renderer::draw(f, &app, &player.snapshot(), None, &mut graphics, false)
+            })
+            .unwrap();
+        let stop_row = zones
+            .menu_dropdown
+            .as_ref()
+            .unwrap()
+            .items
+            .iter()
+            .find(|(_, i)| *i == 1)
+            .unwrap()
+            .0;
+        app.handle_event(motion(stop_row.x + 1, stop_row.y), &zones, &mut player)
+            .unwrap();
+        assert_eq!(app.menu_selected, 1);
+        assert_eq!(
+            player.state, 3,
+            "hover must not stop or otherwise change playback"
+        );
+        terminal
+            .draw(|f| {
+                zones =
+                    crate::renderer::draw(f, &app, &player.snapshot(), None, &mut graphics, false)
+            })
+            .unwrap();
+        assert_eq!(
+            terminal.backend().buffer()[(stop_row.x + 1, stop_row.y)].bg,
+            Color::Rgb(74, 203, 216)
+        );
+        for code in [KeyCode::Down, KeyCode::Up, KeyCode::Enter] {
+            app.handle_event(
+                Event::Key(KeyEvent::new(code, KeyModifiers::NONE)),
+                &zones,
+                &mut player,
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            player.state, 5,
+            "Enter must activate the hovered/keyboard-selected Stop item"
+        );
+        assert_eq!(app.active_menu, None);
+        assert_eq!(app.hovered_menu, None);
+    }
+
+    #[test]
+    fn hovering_between_open_menus_rejects_stale_rows_and_respects_modals() {
+        let mut app = App::new(None);
+        let mut player = FakePlayback::default();
+        let row = Rect::new(1, 2, 30, 1);
+        let zones = HitZones {
+            menu_bar: vec![(Rect::new(40, 0, 7, 1), MenuKind::Audio)],
+            menu_dropdown: Some(MenuDropdown {
+                menu: MenuKind::Playback,
+                area: Rect::new(0, 1, 32, 14),
+                items: vec![(row, 3)],
+            }),
+            ..Default::default()
+        };
+        let mut mouse = MouseEvent {
+            kind: MouseEventKind::Moved,
+            column: 41,
+            row: 0,
+            modifiers: KeyModifiers::NONE,
+        };
+        app.active_menu = Some(MenuKind::Playback);
+        app.handle_mouse(mouse, &zones, &mut player).unwrap();
+        assert_eq!(app.active_menu, Some(MenuKind::Audio));
+        assert_eq!(app.menu_selected, 0);
+        mouse.column = 2;
+        mouse.row = 2;
+        app.handle_mouse(mouse, &zones, &mut player).unwrap();
+        assert_eq!(
+            app.menu_selected, 0,
+            "old Playback rows must not select Audio commands before redraw"
+        );
+        mouse.kind = MouseEventKind::Down(MouseButton::Left);
+        app.handle_mouse(mouse, &zones, &mut player).unwrap();
+        assert_eq!(
+            player.volume, 100,
+            "a stale row must not execute Audio volume-down"
+        );
+        assert_eq!(app.active_menu, Some(MenuKind::Audio));
+        assert_eq!(app.hovered_menu, None);
+        mouse.kind = MouseEventKind::Moved;
+        mouse.column = 41;
+        mouse.row = 0;
+        app.overlay = Overlay::Help;
+        app.handle_mouse(mouse, &zones, &mut player).unwrap();
+        assert_eq!(app.hovered_menu, None);
+        assert_eq!(app.active_menu, Some(MenuKind::Audio));
+        app.overlay = Overlay::None;
+        app.fullscreen = true;
+        app.handle_mouse(mouse, &zones, &mut player).unwrap();
+        assert_eq!(app.hovered_menu, None);
     }
 
     #[test]

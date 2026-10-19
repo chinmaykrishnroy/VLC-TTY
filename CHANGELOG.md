@@ -2,6 +2,7 @@
 
 ## 0.0.1 (first public version, in development)
 
+- Highlight menu headers and dropdown rows on mouse hover; switch open menus across headers without activating commands, and reject clicks on stale dropdown layouts.
 - Negotiate Kitty zlib compression through the bounded terminal probe, preserving raw inline transfer when unsupported; add `--no-kitty-compression` for lower CPU cost. Verify lossless pixels and Windows reply/input handling.
 - Exercise actual keyboard/help probes in short ARM64 pixel smoke checks while preserving their frame minimum; add explicit compressed-protocol emulation for reproducible encoder measurements.
 - Add a manual 30/60/120-minute synthetic codec stress workflow and an optional measured rate-drop gate across 5,000 frames.
