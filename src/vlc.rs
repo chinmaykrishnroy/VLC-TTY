@@ -9,7 +9,6 @@
 //! writes occur on decoder threads.
 
 use std::{
-    alloc::{alloc_zeroed, dealloc, handle_alloc_error, Layout},
     env,
     ffi::{c_char, c_int, c_void, CStr, CString},
     path::{Path, PathBuf},
@@ -28,8 +27,49 @@ pub struct VideoFrame {
     pub width: usize,
     pub height: usize,
     pub pitch: usize,
-    pub bgra: Vec<u8>,
+    pub bgra: FramePixels,
     pub serial: u64,
+}
+/// Own the complete allocation while exposing only its aligned pixel region.
+/// Vec retains its original allocation/layout, so transfer needs no raw-pointer
+/// ownership or unsafe Send/Sync implementation.
+#[derive(Debug, Clone)]
+pub struct FramePixels {
+    storage: Vec<u8>,
+    offset: usize,
+    length: usize,
+}
+impl FramePixels {
+    fn aligned_zeroed(length: usize) -> Option<Self> {
+        let storage = vec![0; length.checked_add(31)?];
+        let offset = (storage.as_ptr() as usize).wrapping_neg() & 31;
+        Some(Self {
+            storage,
+            offset,
+            length,
+        })
+    }
+}
+impl From<Vec<u8>> for FramePixels {
+    fn from(storage: Vec<u8>) -> Self {
+        let length = storage.len();
+        Self {
+            storage,
+            offset: 0,
+            length,
+        }
+    }
+}
+impl std::ops::Deref for FramePixels {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.storage[self.offset..self.offset + self.length]
+    }
+}
+impl std::ops::DerefMut for FramePixels {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        &mut self.storage[self.offset..self.offset + self.length]
+    }
 }
 #[derive(Default)]
 struct Size {
@@ -54,16 +94,10 @@ struct CallbackContext {
 }
 
 struct Picture {
-    data: *mut u8,
-    layout: Layout,
+    data: FramePixels,
     width: usize,
     height: usize,
     pitch: usize,
-}
-impl Drop for Picture {
-    fn drop(&mut self) {
-        unsafe { dealloc(self.data, self.layout) }
-    }
 }
 
 type LockFn = unsafe extern "C" fn(*mut c_void, *mut *mut c_void) -> *mut c_void;
@@ -147,14 +181,10 @@ unsafe extern "C" fn lock_video(opaque: *mut c_void, planes: *mut *mut c_void) -
     let Some(bytes) = pitch.checked_mul(height) else {
         return ptr::null_mut();
     };
-    let Ok(layout) = Layout::from_size_align(bytes, 32) else {
+    let Some(mut data) = FramePixels::aligned_zeroed(bytes) else {
         return ptr::null_mut();
     };
-    let data = alloc_zeroed(layout);
-    if data.is_null() {
-        handle_alloc_error(layout)
-    }
-    *planes = data.cast();
+    *planes = data.as_mut_ptr().cast();
     if ctx.frames.profiling.load(Ordering::Relaxed) {
         ctx.frames
             .picture_allocations
@@ -165,7 +195,6 @@ unsafe extern "C" fn lock_video(opaque: *mut c_void, planes: *mut *mut c_void) -
     }
     Box::into_raw(Box::new(Picture {
         data,
-        layout,
         width,
         height,
         pitch,
@@ -186,33 +215,19 @@ unsafe extern "C" fn display_video(opaque: *mut c_void, picture: *mut c_void) {
         return;
     }
     // Every successful lock returns an independent picture. We reclaim it
-    // after LibVLC presents it, and never expose decoder-owned memory to UI.
+    // after LibVLC presents it. Move its owned allocation to the immutable
+    // snapshot; future locks always allocate a distinct buffer.
     let pic = Box::from_raw(picture as *mut Picture);
     if opaque.is_null() {
         return;
     }
     let ctx = &*(opaque as *const CallbackContext);
-    let measure = ctx
-        .frames
-        .profiling
-        .load(Ordering::Relaxed)
-        .then(std::time::Instant::now);
-    let data = std::slice::from_raw_parts(pic.data, pic.layout.size()).to_vec();
-    if let Some(started) = measure {
-        ctx.frames
-            .copied_bytes
-            .fetch_add(data.len() as u64, Ordering::Relaxed);
-        ctx.frames.copy_us.fetch_add(
-            started.elapsed().as_micros().min(u64::MAX as u128) as u64,
-            Ordering::Relaxed,
-        );
-    }
     let serial = ctx.frames.presented.fetch_add(1, Ordering::Relaxed) + 1;
     let frame = Arc::new(VideoFrame {
         width: pic.width,
         height: pic.height,
         pitch: pic.pitch,
-        bgra: data,
+        bgra: pic.data,
         serial,
     });
     *ctx.frames.latest.lock().unwrap_or_else(|e| e.into_inner()) = Some(frame);
@@ -1050,8 +1065,9 @@ mod tests {
     }
     #[test]
     fn layout_is_32_byte_aligned() {
-        let l = Layout::from_size_align(320 * 4 * 240, 32).unwrap();
-        assert_eq!(l.align(), 32);
+        let data = FramePixels::aligned_zeroed(320 * 4 * 240).unwrap();
+        assert_eq!(data.as_ptr() as usize % 32, 0);
+        assert_eq!(data.len(), 320 * 4 * 240);
     }
     #[test]
     fn video_callbacks_publish_an_owned_frame() {
@@ -1088,6 +1104,49 @@ mod tests {
         assert_eq!(frame.serial, 1);
         assert_eq!(frame.width, w as usize);
         assert_eq!(frame.bgra[0], 42);
+    }
+    #[test]
+    fn presented_pixels_transfer_without_copy_and_outlive_decoder_context() {
+        let store = Arc::new(FrameStore::default());
+        store.profiling.store(true, Ordering::Relaxed);
+        *store.size.lock().unwrap() = Size {
+            width: 8,
+            height: 4,
+            pitch: 32,
+        };
+        let mut context = Box::new(CallbackContext {
+            frames: store.clone(),
+            decode_height: 1080,
+        });
+        let opaque = (&mut *context as *mut CallbackContext).cast();
+        let mut plane = ptr::null_mut();
+        unsafe {
+            let picture = lock_video(opaque, &mut plane);
+            ptr::write_bytes(plane, 42, 128);
+            display_video(opaque, picture);
+        }
+        let first = store.latest.lock().unwrap().as_ref().unwrap().clone();
+        assert_eq!(
+            first.bgra.as_ptr() as usize,
+            plane as usize,
+            "Publishing must transfer the aligned buffer, not copy it"
+        );
+        unsafe {
+            let second = lock_video(opaque, &mut plane);
+            ptr::write_bytes(plane, 99, 128);
+            display_video(opaque, second);
+        }
+        assert_eq!(
+            first.bgra[0], 42,
+            "The next decode must not overwrite a retained frame"
+        );
+        assert_eq!(store.latest.lock().unwrap().as_ref().unwrap().bgra[0], 99);
+        assert_eq!(store.copied_bytes.load(Ordering::Relaxed), 0);
+        drop(context);
+        drop(store);
+        std::thread::spawn(move || assert!(first.bgra.iter().all(|v| *v == 42)))
+            .join()
+            .unwrap();
     }
     fn wait_for_decoded_progress(player: &VlcPlayer) {
         let started = std::time::Instant::now();
@@ -1329,9 +1388,12 @@ mod tests {
         let metrics = player.decode_metrics();
         assert!(metrics.frames >= 3);
         assert!(metrics.picture_allocations >= metrics.owned_frames);
-        assert!(metrics.copied_bytes >= metrics.owned_frames * frame.bgra.len() as u64);
+        assert_eq!(
+            metrics.copied_bytes, 0,
+            "Presented buffers must transfer without copying"
+        );
         eprintln!(
-            "Video allocation metrics: {} pictures, {} presented copies, {} copied bytes",
+            "Video allocation metrics: {} pictures, {} owned frames, {} copied bytes",
             metrics.picture_allocations, metrics.owned_frames, metrics.copied_bytes
         );
     }

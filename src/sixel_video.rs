@@ -220,7 +220,9 @@ mod tests {
             }
         }
         assert!(decoded.pixels[11 * 13 * 4..]
-            .chunks_exact(4)
+            .as_chunks::<4>()
+            .0
+            .iter()
             .all(|p| p[3] == 0));
     }
     #[test]
@@ -229,7 +231,7 @@ mod tests {
             width: 16,
             height: 9,
             pitch: 64,
-            bgra: [10, 60, 200, 255].repeat(16 * 9),
+            bgra: [10, 60, 200, 255].repeat(16 * 9).into(),
             serial: 1,
         };
         let font = FontSize::new(10, 20);

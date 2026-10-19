@@ -2,7 +2,7 @@
 
 Run `vlc-tty --metrics run.jsonl --silent movie.mp4` to record bounded, once-per-second server metrics. The output must be a new file. Recording works on Windows, Linux, and macOS; it is opt-in.
 
-The counters distinguish LibVLC video display callbacks, picture allocations, bytes copied, encoder requests/completions, replaced pending work, rejected stale results, unique frames submitted to the terminal backend, and backend bytes written. Encoding, worker queue wait, and draw durations report the 95th percentile of the most recent 256 samples. Callback counts are not LibVLC's internal decoded-picture statistics. Backend bytes omit terminal setup, synchronization markers, SSH overhead, and some protocol cleanup writes. The final sample can precede exit by up to one second.
+The counters distinguish LibVLC video display callbacks, picture allocations, bytes copied, encoder requests/completions, replaced pending work, rejected stale results, unique frames submitted to the terminal backend, and backend bytes written. The current display callback transfers its owned allocation, so `copied_bytes` and `copy_time_us` remain zero for that handoff; they do not count LibVLC's internal conversion or later encoder reads. Encoding, worker queue wait, and draw durations report the 95th percentile of the most recent 256 samples. Callback counts are not LibVLC's internal decoded-picture statistics. Backend bytes omit terminal setup, synchronization markers, SSH overhead, and some protocol cleanup writes. The final sample can precede exit by up to one second.
 
 ## Reproducible server stress test
 

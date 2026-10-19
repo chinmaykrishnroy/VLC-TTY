@@ -11,7 +11,7 @@ LibVLC is dynamically loaded at runtime. It supplies media access, demuxing, dec
 
 On macOS, preload the sibling `libvlccore.dylib` before LibVLC and retain both handles. VLC.app uses an `@rpath` core dependency that an external executable does not automatically inherit. This follows the loading order in [VideoLAN's Python binding](https://mailman.videolan.org/pipermail/vlc-commits/2018-February/047473.html); CI checks actual loading from a copied official bundle rather than masking it with a developer's library path.
 
-`src/vlc.rs` owns the FFI, media player and video callbacks. Decode callbacks publish the latest presented RV32/BGRA frame without writing terminal output. Frame dimensions use a startup budget. Memory callbacks involve CPU conversion/copy costs; do not infer GPU-equivalent performance from desktop VLC.
+`src/vlc.rs` owns the FFI, media player and video callbacks. Decode callbacks publish the latest presented RV32/BGRA frame without writing terminal output. Each lock gets a distinct Rust-owned allocation with an aligned pixel region; display transfers that allocation to the immutable snapshot without copying the full frame. Retained frames survive later decodes and player teardown. Frame dimensions use a startup budget. LibVLC still performs CPU color conversion and writes the supplied buffers; this does not imply GPU-equivalent performance to desktop VLC.
 
 `src/playback.rs` defines the control seam. `src/app.rs` coordinates actions; `src/queue.rs` owns ordering/repeat independently of file browsing. Fake playback supports deterministic control tests; separate runtime tests require actual decoded frames.
 

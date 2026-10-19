@@ -1247,7 +1247,7 @@ mod tests {
             width: 1,
             height: 1,
             pitch: 4,
-            bgra: vec![10, 20, 30, 255],
+            bgra: vec![10, 20, 30, 255].into(),
             serial: 1,
         };
         assert_eq!(pixel(&v, 0, 0), (30, 20, 10));
@@ -1258,7 +1258,7 @@ mod tests {
             width: 640,
             height: 360,
             pitch: 2560,
-            bgra: vec![],
+            bgra: vec![].into(),
             serial: 1,
         };
         let (w, h) = fit_dimensions(&v, Rect::new(0, 0, 80, 24));
@@ -1292,7 +1292,9 @@ mod tests {
                 width: width as usize,
                 height: height as usize * 2,
                 pitch: width as usize * 4,
-                bgra: [0, 0, 255, 255].repeat(width as usize * height as usize * 2),
+                bgra: [0, 0, 255, 255]
+                    .repeat(width as usize * height as usize * 2)
+                    .into(),
                 serial: 1,
             };
             let info = PlaybackSnapshot {

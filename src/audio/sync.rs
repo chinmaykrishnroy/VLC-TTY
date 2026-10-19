@@ -92,7 +92,7 @@ mod tests {
             width: 1,
             height: 1,
             pitch: 4,
-            bgra: vec![0; 4],
+            bgra: vec![0; 4].into(),
             serial,
         }))
     }

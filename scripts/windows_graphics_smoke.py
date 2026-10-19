@@ -187,7 +187,7 @@ def fixture(folder):
     return path
 
 
-def smoke(binary, mode="sixel", host=None):
+def smoke(binary, mode="sixel", host=None, startup_timeout=20):
     for name in ["TERM_PROGRAM", "TERM", "KITTY_WINDOW_ID", "NO_COLOR"]:
         os.environ.pop(name, None)
     with tempfile.TemporaryDirectory(prefix="vlc-tty-art-") as temporary:
@@ -196,7 +196,8 @@ def smoke(binary, mode="sixel", host=None):
         # those with read/write handles to this new console before launching VLC.
         terminal = Console([sys.executable, Path(__file__).resolve(), "--console-child", binary.resolve()], host, mode)
         try:
-            data = terminal.wait_for(lambda data: b"\x1b[16t" in data or b"ANSI half-block" in data)
+            data = terminal.wait_for(lambda data: b"\x1b[16t" in data or b"ANSI half-block" in data,
+                                     timeout=startup_timeout)
             assert b"\x1b[16t" in data, "Auto graphics never queried Windows console capabilities (ANSI regression)"
             if mode == "sixel":
                 terminal.wait_for(lambda data: b"Sixel pixel graphics" in data)
@@ -261,5 +262,8 @@ if __name__ == "__main__":
     parser.add_argument("--mode", choices=["sixel", "no-sixel", "timeout", "menu-hover"], default="sixel")
     parser.add_argument("--host-directory", type=Path,
                         help="Download checksum-pinned modern Microsoft ConPTY into this test directory")
+    parser.add_argument("--startup-timeout", type=float, default=20,
+                        help="Allow extra startup time for a cold portable extraction")
     args = parser.parse_args()
-    smoke(args.binary, args.mode, prepare_host(args.host_directory) if args.host_directory else None)
+    smoke(args.binary, args.mode, prepare_host(args.host_directory) if args.host_directory else None,
+          args.startup_timeout)

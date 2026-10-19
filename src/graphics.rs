@@ -572,7 +572,7 @@ mod tests {
             width: 32,
             height: 16,
             pitch: 32 * 4,
-            bgra: [20, 60, 130, 255].repeat(32 * 16),
+            bgra: [20, 60, 130, 255].repeat(32 * 16).into(),
             serial: 1,
         };
         let mut outputs = Vec::new();
@@ -628,7 +628,7 @@ mod tests {
             width: 1280,
             height: 720,
             pitch: 1280 * 4,
-            bgra: vec![0; 1280 * 720 * 4],
+            bgra: vec![0; 1280 * 720 * 4].into(),
             serial: 1,
         };
         for noisy in [false, true] {
@@ -711,7 +711,7 @@ mod tests {
             width: 2,
             height: 2,
             pitch: 8,
-            bgra: vec![128; 16],
+            bgra: vec![128; 16].into(),
             serial: 1,
         };
         let Protocol::Sixel(proto) =
@@ -749,7 +749,7 @@ mod tests {
             width: 2,
             height: 1,
             pitch: 12,
-            bgra: vec![10, 20, 30, 255, 40, 50, 60, 255, 0, 0, 0, 0],
+            bgra: vec![10, 20, 30, 255, 40, 50, 60, 255, 0, 0, 0, 0].into(),
             serial: 1,
         };
         let img = bgra_to_rgb(&frame).unwrap();
@@ -762,7 +762,7 @@ mod tests {
             width: 3,
             height: 1,
             pitch: 4,
-            bgra: vec![0; 4],
+            bgra: vec![0; 4].into(),
             serial: 1,
         };
         assert!(bgra_to_rgb(&frame).is_none());
@@ -795,7 +795,7 @@ mod tests {
             width: 2,
             height: 2,
             pitch: 8,
-            bgra: vec![128; 16],
+            bgra: vec![128; 16].into(),
             serial: 1,
         };
         for _ in 0..2 {
@@ -828,7 +828,7 @@ mod tests {
             width: 4,
             height: 4,
             pitch: 16,
-            bgra: vec![128; 64],
+            bgra: vec![128; 64].into(),
             serial: 1,
         };
         let res = encode_sixel_fast(&frame, Size::new(2, 1), FontSize::new(10, 20), false);
@@ -851,7 +851,7 @@ mod tests {
             width: 1920,
             height: 1080,
             pitch: 1920 * 4,
-            bgra: vec![128; 1920 * 1080 * 4],
+            bgra: vec![128; 1920 * 1080 * 4].into(),
             serial: 1,
         };
         // Simulated fullscreen: 180 cols x 45 rows, font 9x18

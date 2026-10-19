@@ -278,7 +278,7 @@ pub fn image_to_video_frame(img: image::DynamicImage) -> Arc<VideoFrame> {
         width: w as usize,
         height: h as usize,
         pitch: (w * 4) as usize,
-        bgra,
+        bgra: bgra.into(),
         serial: 1,
     })
 }

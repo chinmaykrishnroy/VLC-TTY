@@ -22,3 +22,11 @@ Validation at this checkpoint: 99 deterministic Rust tests passed, six explicit 
 The 30.7-second first opening has not been reproduced consistently after warming caches; later starts do not prove that cold-start issue permanently fixed. A ConPTY sink counts backend submissions rather than visible Windows Terminal frames. Muted audio-clock tests cannot certify audible lip sync. Full-movie visual acceptance remains open. The portable build and installed executable are validated separately after this source checkpoint.
 
 See [benchmark instructions](../BENCHMARKING.md) for the native probe and metric definitions.
+
+## Buffer ownership follow-up
+
+An additional callback regression first failed on the former copy path, then passed with ownership transfer. Each native picture now owns a Vec allocation with an aligned pixel subregion; the complete allocation moves into the retained snapshot. No raw allocation is adopted by a differently aligned Vec, and no unsafe Send/Sync implementation is introduced. The test checks pointer identity, previous-frame isolation during another decode, and frame access on another thread after the callback context is dropped. The five real LibVLC checks pass, including actual zero copied bytes. The normal Rust suite now passes 100 tests, with the six runtime/manual checks excluded from that normal invocation.
+
+A final serial source-player probe repeated the exact Pi-to-local transition with the local audio clock active at volume zero: **21.31 backend submissions/sec**, 23.46 callback frames/sec over 39.975 measured seconds, 24 ms encoder p95, 54 ms draw p95, 134 ms request-to-backend p95, 2.10-second dropped-file startup, 128 ms help response, zero encoding failures and clean exit/restoration. Callback copy counters remained zero. These source-player results precede the standalone installation check and retain the presentation/cold-start limitations above.
+
+The pushed encoder checkpoint's CI found a newer Clippy array-chunk lint; the follow-up uses `as_chunks`. Packaging regression checks also require the linked performance report in the explicit documentation inventory. An artwork smoke timed out on shutdown during concurrent checks; the isolated captured rerun and independent hover smoke both passed. A single rerun does not establish that every startup/shutdown timing case is eliminated.
