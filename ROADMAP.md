@@ -14,7 +14,8 @@ The release gate is a usable terminal player for local media and remote files, w
 - [x] Verify Pi 5 / Ubuntu Server 26.04 headless decoding, ANSI controls and direct SSH transport.
 - [ ] Complete pixel-protocol visual acceptance in the intended client terminal.
 - [x] Record an 11-minute Pi encoder stress run beyond 5,000 frames for Kitty and Sixel, with separate throughput and memory measurements.
-- [ ] Resolve Kitty's missed throughput target and measure movie-length responsiveness in real client terminals; PTY sink results do not establish visible FPS.
+- [x] Negotiate lossless Kitty compression, record serial raw/compressed baselines and pass a thirty-minute Pi encoder run beyond 24,000 frames.
+- [ ] Reach the requested frame-rate target where practical and measure movie-length responsiveness in real client terminals; PTY sink results do not establish visible FPS.
 
 ## Public 0.0.1
 
@@ -30,7 +31,8 @@ The release gate is a usable terminal player for local media and remote files, w
 - [x] Load streamed MP3 tags and embedded covers through bounded background range reads; display readable URL filenames.
 - [x] Implement authenticated PCM forwarding and a local receiver through the `connect` helper.
 - [ ] Validate server-rendered A/V alignment, jitter handling, device loss and movie-length audio continuity.
-- [ ] Measure Kitty transfer/encoding costs and compare serial benchmark baselines before selecting optimizations.
+- [x] Measure Kitty transfer/encoding costs and compare serial benchmark baselines before selecting optimizations.
+- [x] Provide a manual codec stress workflow and an optional measured rate-drop gate after 5,000 frames.
 - Interactive queue editing and saving the current queue.
 - Saved settings, recent media and resume positions.
 - Better stream buffering/error reporting and reconnect behavior.

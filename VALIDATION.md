@@ -1,5 +1,13 @@
 # Validation — 17 October 2026
 
+## Graphics follow-up — 19 October 2026
+
+Kitty compression negotiation and its compatibility fallback are covered by lossless payload, capability and Windows reply regressions. The Windows suite passes 94 deterministic Rust tests, five explicit LibVLC runtime checks, strict Clippy with and without the audio client, thirteen Python tooling tests (one additional POSIX-only test is skipped on Windows), and actionlint.
+
+Serial Pi baselines reduced Kitty protocol volume by about 85 percent on the tested fixture, with increased CPU cost. A thirty-minute Pi encoder run subsequently passed with 24,495 encoded frames, no encoding failures, stable median rates around 13.7 FPS across 5,000 frames, 59 successful help probes and clean terminal restoration. Read the [detailed report](docs/audio-and-fullscreen-validation.md) for source/build identity, resource measurements and limits. The [native CI run](https://github.com/chinmaykrishnroy/VLC-TTY/actions/runs/39217835521) records the platform matrix at `f814b9e`.
+
+The updated Windows standalone passed bundled-runtime and native-console Sixel artwork checks. Synthetic PTY sinks and console protocol assertions still do not establish client-visible frame rate, real-terminal visual quality, audible A/V alignment or public-release readiness.
+
 ## Follow-up evidence — 18 October 2026
 
 The sections below preserve earlier checkpoint results. Current audio, fullscreen and sustained encoder evidence is recorded in [audio and fullscreen development checks](docs/audio-and-fullscreen-validation.md). That report includes the 660-second concurrent Pi PTY tests: Sixel encoded 8,996 frames and passed its minimum; Kitty encoded 5,859 and missed its minimum. Neither result establishes client-visible FPS or movie-length playback.
