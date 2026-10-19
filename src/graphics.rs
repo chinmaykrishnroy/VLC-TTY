@@ -128,7 +128,7 @@ impl GraphicsRenderer {
         let draw_latency_us = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let worker_draw_latency = draw_latency_us.clone();
         thread::spawn(move || {
-            let mut budget = crate::sixel_video::VideoBudget::default();
+            let mut budget = crate::sixel_video::PaletteBudget::default();
             while let Some(req) = requests.recv() {
                 let started = Instant::now();
                 if let Some(metrics) = &worker_metrics {

@@ -48,6 +48,7 @@ pub struct EncoderMetrics {
     pub encode: Latency,
     pub queue_wait: Latency,
     pub request_to_backend: Latency,
+    /// Sixel palette-training ceiling; this no longer reduces spatial detail.
     pub work_pixel_budget: AtomicU64,
 }
 

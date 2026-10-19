@@ -21,7 +21,7 @@
 - File browser, UTF-8 M3U playlists, shuffle and repeat modes.
 - External SRT/VTT captions, track selection and subtitle timing controls.
 - Kitty, Sixel and iTerm2 pixel graphics, plus ANSI half-block fallback. Kitty uses lossless compression when confirmed by the terminal; `--no-kitty-compression` opts out.
-- Sixel video follows the video widget's pixel size on resize. Processing detail adapts to encoding/output cost while preserving the picture's display size and aspect ratio; static album artwork keeps its full-detail encoder.
+- Sixel video follows the widget's pixel size on resize. Adaptive colour-palette training preserves spatial detail, with light dithering for gradients; static album artwork keeps its full-detail encoder.
 - Silent SSH profile with bounded decode size and frame rate.
 - Original compressed-file streaming over SSH with local decoding, speakers and seeking.
 - Experimental server-rendered playback with PCM audio forwarded to local speakers.

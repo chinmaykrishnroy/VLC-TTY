@@ -15,7 +15,7 @@ These are individual runs, not statistical speedup claims. The first old-default
 
 The exact Pi-to-local transition subsequently passed with a real local audio clock enabled at volume zero: 40.447 measured seconds, 15.90 backend submissions/sec, 17.08 display callbacks/sec, 27 ms encoding p95, 90 ms draw p95, 245 ms request-to-backend p95, 2.23-second file-drop startup and 127 ms help response. It recorded no encoding failures and exited/restored the terminal. Some earlier development runs overlapped Rust compilation; use the reproducible probe for serial comparisons on an idle machine.
 
-The new encoder quantizes a widget-bounded working image and scales palette-index runs into the widget's physical pixel size. This removes the full-resolution RGBA allocation and full-resolution quantizer input from the motion path. A cost controller reduces processing detail quickly and restores it gradually. Static artwork retains its existing full-detail path. Round-trip decoded-pixel tests cover scaling across Sixel bands, transparent padding, resize dimensions and budget recovery. Draw cadence now counts output time within the requested interval.
+The initial performance encoder quantized a widget-bounded working image and scaled palette-index runs into the widget's physical pixel size (superseded by the quality correction below). This removes the full-resolution RGBA allocation and full-resolution quantizer input from the motion path. A cost controller reduces processing detail quickly and restores it gradually. Static artwork retains its existing full-detail path. Round-trip decoded-pixel tests cover scaling across Sixel bands, transparent padding, resize dimensions and budget recovery. Draw cadence now counts output time within the requested interval.
 
 Validation at this checkpoint: 99 deterministic Rust tests passed, six explicit runtime/manual tests remained excluded from that normal suite, strict Clippy passed, thirteen Python tooling tests passed with one POSIX-only skip, and actionlint passed. The Windows menu-hover and artwork console checks cover the independent mouse/static-image paths.
 
@@ -44,3 +44,30 @@ The verified executable is installed at `C:\Users\morph\AppData\Local\Programs\V
 The physical Ubuntu 26 Pi 5 compiled the exact source commit with the headless feature set in a separate testing directory. Its thirty-second Sixel PTY smoke passed: 397 submitted frames in the final report, nine help probes (maximum 45 ms), zero frame copies, zero encoding failures and clean terminal restoration. Peak summed RSS was 144.7 MiB; average sampled CPU was 83.5 percent of one core. This is a short synthetic server smoke, not full-movie presentation evidence; the installed Pi player was not replaced.
 
 [CI at the executable's source commit](https://github.com/chinmaykrishnroy/VLC-TTY/actions/runs/39237309140) passed all eight jobs: six native OS/architecture lanes, Ubuntu 26 ARM64 headless checks, and runtime-source preservation. Public publication remains subject to the existing strict runtime-source correspondence gate.
+
+
+## Fullscreen quality correction — October 19, 2026
+
+The follow-up screenshot showed coarse blocks and damaged lettering. A decoder-frame extraction from the user's local movie remained sharp. The old adaptive motion path could reduce its spatial working image to 320×180 and enlarge those indices to a fullscreen raster. A deterministic decoded-Sixel regression reproduced the defect: only 2,880 of 5,184 fine black/white pixels survived. The correction preserves those strokes and periodic RGB strokes, including palette-sampling alias cases and source upscaling.
+
+Only colour-palette training is sampled now: its ceiling starts at 57,600 pixels, can decrease to 14,400 and recover to 230,400. Stable stratified sample positions avoid a fixed grid missing periodic textures. Every fitted picture pixel comes from the decoder; when the widget is larger than the decoded source, native source indices are expanded without discarding any additional source resolution. A frame-local 4 MiB colour cache bounds repeated matching work. Palette matching uses representable Sixel colours, and light ordered dithering reduces banding. Static artwork and other protocols retain their existing paths.
+
+A release-mode round trip of one 1920×1080 opening studio frame from the private movie measured **27.19 dB PSNR** for the old minimum spatial budget and **40.56 dB** for the new minimum palette budget. The source, raster size and decoder were unchanged. These are pixel-error measurements of one frame, not a perceptual quality score for the movie. The new palette-budget cases measured 39–41 ms median encoding over three repetitions and approximately 0.56–0.68 MB output per frame; stronger dithering was rejected because it roughly doubled output on this frame. Preview PNGs and the isolated harness stay in ignored local diagnostics; private movie images are not committed or uploaded.
+
+Two short Windows ConPTY probes used the same movie, 188×50 cells, a muted active local audio clock and 40 seconds after dropping the file:
+
+| Measurement | Previous spatial downsampling | Preserved picture detail |
+| --- | --- | --- |
+| Backend submissions/sec | 23.92 | 19.67 |
+| Video callbacks/sec | 23.98 | 23.95 |
+| Encode p95 | 8.40 ms | 36.10 ms |
+| Backend draw p95 | 27.68 ms | 70.27 ms |
+| Request-to-backend p95 | 58.28 ms | 149.20 ms |
+| Help response | 118 ms | 107 ms |
+| Captured terminal output | 114.5 MB | 337.2 MB |
+| Encoding failures | 0 | 0 |
+| Clean quit and terminal restoration | Passed | Passed |
+
+The throughput windows exclude initial opening (31.48 and 33.91 measured seconds respectively). Captured output totals include UI/protocol traffic throughout the probe. Quality requires more bandwidth and work; the gate was retained at 12 backend submissions/sec and 500 ms maximum help latency. These measurements establish responsive backend playback at the improved detail level, not visible Windows Terminal FPS, speaker alignment or movie-length stability. SSH connections and terminal clients can impose additional limits.
+
+The normal Windows Rust suite passes 111 deterministic tests; the five real-runtime checks and manual encoder benchmark remain separately selected. Strict Clippy, packaging regressions and the fullscreen Sixel resize/Escape/quit smoke passed locally. Final packaged validation and CI results are recorded after building this checkpoint.

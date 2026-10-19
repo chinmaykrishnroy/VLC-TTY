@@ -17,6 +17,8 @@ On macOS, preload the sibling `libvlccore.dylib` before LibVLC and retain both h
 
 `src/graphics.rs` performs scaling and encoding on a worker. One-slot request and response mailboxes replace old work. Generation IDs reject output from an old media/layout state. A single owned Kitty image ID replaces previous frames and is deleted on invalidation/exit. Kitty transfers image data inline, so the SSH client does not need access to server files. tmux passthrough escapes every inner ESC.
 
+Sixel motion maps decoder pixels into the fitted widget raster. `src/sixel_video.rs` samples only the palette-training data, using stable stratified positions to avoid missing periodic textures. Its adaptive sample ceiling never becomes an enlarged low-resolution picture. A per-frame 4 MiB colour lookup cache bounds repeated palette searches; matching uses the colours Sixel can actually display, with a small ordered dither to reduce gradient banding. The source and terminal grid still bound spatial resolution, and the protocol retains at most 256 palette entries.
+
 `src/renderer.rs` draws the terminal layout and ANSI fallback. External captions have reserved text rows outside pixel graphics. Menus and dialogs use the text renderer to avoid image overlap. Terminal image/text ordering still requires testing in each client.
 
 `src/options.rs` resolves flags and SSH defaults before decoder/terminal initialization. `--ssh` selects silent audio, 15 FPS and a 720p callback cap; explicit flags override those defaults. Local defaults are 60 FPS and a 1080p cap. `--doctor` and `--smoke-test` work without a TTY.
