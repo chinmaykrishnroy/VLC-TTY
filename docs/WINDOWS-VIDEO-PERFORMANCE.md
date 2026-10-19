@@ -71,3 +71,21 @@ Two short Windows ConPTY probes used the same movie, 188×50 cells, a muted acti
 The throughput windows exclude initial opening (31.48 and 33.91 measured seconds respectively). Captured output totals include UI/protocol traffic throughout the probe. Quality requires more bandwidth and work; the gate was retained at 12 backend submissions/sec and 500 ms maximum help latency. These measurements establish responsive backend playback at the improved detail level, not visible Windows Terminal FPS, speaker alignment or movie-length stability. SSH connections and terminal clients can impose additional limits.
 
 The normal Windows Rust suite passes 111 deterministic tests; the five real-runtime checks and manual encoder benchmark remain separately selected. Strict Clippy, packaging regressions and the fullscreen Sixel resize/Escape/quit smoke passed locally. Final packaged validation and CI results are recorded after building this checkpoint.
+
+
+### Packaged quality checkpoint and installation
+
+The final executable source is `09871bab6e7cc5bb932af876c875ccd00396a28f`; production rendering matches the measured `aa4cb15` checkpoint, with a subsequent fixed-array test-only cleanup for newer Clippy. [All eight CI jobs passed](https://github.com/chinmaykrishnroy/VLC-TTY/actions/runs/39298653161). Both downloaded artifact archives were checked against GitHub's SHA-256 digest, their embedded clean-source/architecture manifests and the executable checksum companions.
+
+The Windows x64 standalone passed the complete local portable verifier, including concurrent diagnostics, isolated bundled LibVLC, decoded progress, extraction/document inventory, cleanup and forced supervisor termination. It then repeated **Pi MP3 streaming → dropped local movie in fullscreen**, with an active local audio clock muted at volume zero: **20.16 backend submissions/sec**, 23.92 callbacks/sec over 35.87 measured seconds, 43.27 ms encoder p95, 59.73 ms draw p95, 120.74 ms request-to-backend p95 and 111 ms help response. Encoding failures were zero, and quit/terminal restoration passed. UI setup, private extraction and SSH music startup took 24.68 seconds; the movie drop reached its first new callback after 2.03 seconds. These remain backend/clock checks, not visible FPS or audible lip-sync measurements.
+
+A separate round trip of the Paramount scene at 30 seconds in the same file measured 23.83 dB PSNR with the old minimum spatial budget and 41.00 dB with the new minimum palette-training budget. The corrected output retains the fine mountain detail and script lettering. These local previews are decoded protocol output rather than screenshots of a physical terminal.
+
+The Pi 5 compiled source `aa4cb15` headlessly and passed a 30-second Sixel probe: 396 submitted frames in the final 29.04-second sample, nine help probes (maximum 69 ms), 144.22 MiB peak summed RSS, 91.89 percent average CPU of one core, zero copies/errors and clean restoration. The actual Linux ARM64 standalone then decoded headlessly with bundled LibVLC 3.0.20 and passed a 20-second Sixel probe: 235 submissions in the final 17.25-second sample, six help probes (maximum 67 ms), 204.76 MiB peak summed RSS, zero copies/errors and clean restoration. The standalone's process-tree memory includes its supervisor and may double-count shared pages. No full-movie or post-5,000-frame claim follows from these short tests.
+
+Verified installed executables, with previous versions retained as backups and running user processes preserved:
+
+- Windows PATH: `C:\Users\morph\AppData\Local\Programs\VLC-TTY\vlc-tty.exe`, plus both workspace `target/release` launch names. SHA-256: `376a347eedc891c8d39dbaf75a5cdac1876b07bd1b18a1c383cff1d4a786a951`.
+- Pi: `/usr/local/bin/vlc-tty` and `/home/roy/.local/bin/vlc-tty`, replaced atomically after packaged decoding/interaction checks. SHA-256: `98a5d0b15ffa926b8f24f644136a7da476291dc501f136417db3a90620532926`.
+
+Restart an existing player process to use the corrected renderer. The fix is automatic; the 256-colour Sixel palette still imposes a colour/bandwidth tradeoff. Cold startup and physical presentation remain separate acceptance concerns.
