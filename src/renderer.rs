@@ -892,7 +892,7 @@ pub fn draw(
         // Uses the reserved top rows and disappears after 2 seconds.
         if app.show_osd() {
             let label = if app.status_visible() {
-                format!(" {} ", app.status)
+                format!(" {} | {} ", state_label(info.state), app.status)
             } else {
                 format!(
                     " {}   {} / {}   Vol {}%   {:.2}x ",
@@ -1279,6 +1279,35 @@ mod tests {
         let small = fullscreen_content_area(Rect::new(0, 0, 24, 8), true, true);
         assert!(small.height > 0);
         assert!(small.bottom() <= 8);
+    }
+    #[test]
+    fn fullscreen_notification_keeps_paused_state_visible() {
+        use crate::graphics::{GraphicsChoice, GraphicsRenderer};
+        use crate::playback::{test_support::FakePlayback, Playback};
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut app = App::new(None);
+        app.toggle_fullscreen();
+        app.notify("Use the terminal fullscreen shortcut");
+        let mut info = FakePlayback::default().snapshot();
+        info.state = 4;
+        let mut graphics = GraphicsRenderer::new(GraphicsChoice::Ansi, 15, None, true);
+        let mut terminal = Terminal::new(TestBackend::new(100, 32)).unwrap();
+        terminal
+            .draw(|frame| {
+                draw(frame, &app, &info, None, &mut graphics, false);
+            })
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            text.contains("PAUSED | Use the terminal fullscreen shortcut"),
+            "{text}"
+        );
     }
     #[test]
     fn fullscreen_without_visible_overlays_reaches_every_terminal_edge() {
