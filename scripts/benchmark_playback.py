@@ -55,6 +55,26 @@ def phases(path, renderer):
     return result
 
 
+def sustained_rate_acceptance(comparison, maximum_drop):
+    if maximum_drop is None:
+        return {"required": False, "passed": True}
+    before, after = comparison["before_5000"], comparison["after_5000"]
+    result = {"required": True, "maximum_fractional_drop": maximum_drop, "passed": False}
+    if min(before["samples"], after["samples"]) < 20:
+        return dict(result, reason="need at least 20 samples in both frame phases")
+    fields = ["median_unique_frames_drawn_per_second"]
+    if before["counter"] == "encoded_frames":
+        fields.append("median_encoded_frames_per_second")
+    ratios = {}
+    for field in fields:
+        baseline, latest = before.get(field), after.get(field)
+        if baseline is None or latest is None or baseline <= 0:
+            return dict(result, reason="missing positive baseline rate")
+        ratios[field] = latest / baseline
+    return dict(result, after_to_before=ratios,
+                passed=all(ratio >= 1 - maximum_drop for ratio in ratios.values()))
+
+
 def benchmark(args):
     import fcntl
     import pty
@@ -67,6 +87,7 @@ def benchmark(args):
     app_metrics = output / "application.jsonl"
     metadata = {"schema": 1, "renderer": args.renderer, "duration_requested_s": args.duration,
                 "fps_limit": args.fps, "decode_height": args.decode_height, "terminal_cells": [args.columns, args.rows],
+                "kitty_compression_emulated": args.kitty_compression, "help_probe_interval_s": args.probe_interval,
                 "os": platform.platform(), "architecture": platform.machine(), "client_presented_fps": None,
                 "scope": "server pipeline and PTY drain; no real graphics client, SSH wire throughput or end-user FPS measurement",
                 "resource_scope": "Linux launcher and descendants, sampled once per second; summed RSS can double-count shared pages"}
@@ -85,7 +106,9 @@ def benchmark(args):
                                stdin=slave, stdout=slave, stderr=slave, env=env, preexec_fn=setup)
     os.close(slave)
     started = time.monotonic()
-    next_sample, next_probe = started + 1, started + 30
+    next_sample, next_probe = started + 1, started + args.probe_interval
+    compression_answered = False
+    compression_used = False
     pending_probe = None
     probe_tail = bytearray()
     tail = bytearray()
@@ -99,7 +122,7 @@ def benchmark(args):
     last_decode_progress = last_draw_progress = started
 
     def drain(wait=0.05):
-        nonlocal total_bytes, pending_probe, probe_count, probe_latency_max_ms, terminal_restored, next_probe
+        nonlocal total_bytes, pending_probe, probe_count, probe_latency_max_ms, terminal_restored, next_probe, compression_answered, compression_used
         if not select.select([master], [], [], wait)[0]:
             return
         try:
@@ -110,6 +133,12 @@ def benchmark(args):
         tail.extend(data)
         del tail[:-65536]
         terminal_restored = terminal_restored or b"\x1b[?1049l" in tail
+        # This is an explicit protocol emulator for measuring the negotiated
+        # encoder path, not evidence of a real Kitty client's presentation.
+        if args.kitty_compression and not compression_answered and b"\x1b_Gi=32," in tail:
+            os.write(master, b"\x1b_Gi=31;OK\x1b\\\x1b_Gi=32;OK\x1b\\")
+            compression_answered = True
+        compression_used = compression_used or b"f=32,o=z,t=d" in tail
         if pending_probe is not None:
             probe_tail.extend(data)
             del probe_tail[:-65536]
@@ -118,7 +147,7 @@ def benchmark(args):
                 probe_latency_max_ms = max(probe_latency_max_ms, latency)
                 probe_count += 1
                 pending_probe = None
-                next_probe = time.monotonic() + 30
+                next_probe = time.monotonic() + args.probe_interval
                 os.write(master, b"\x1b")
 
     try:
@@ -182,13 +211,22 @@ def benchmark(args):
                      and latest["unique_frames_drawn"] >= args.minimum_frames and latest["encode_failures"] == 0)
             if args.renderer != "ansi":
                 valid = valid and latest is not None and latest["encoded_frames"] >= args.minimum_frames
+            if args.duration >= args.probe_interval + 5:
+                valid = valid and probe_count > 0
+            if args.kitty_compression:
+                valid = valid and compression_answered and compression_used
+            comparison = phases(output / "samples.jsonl", args.renderer)
+            sustained = sustained_rate_acceptance(comparison, args.maximum_rate_drop)
+            valid = valid and sustained["passed"]
             summary = dict(metadata, passed=bool(valid), exit_code=code, wall_elapsed_s=round(elapsed, 3),
                            samples=samples, pty_bytes=total_bytes, terminal_restored=terminal_restored,
                            help_probes=probe_count, help_response_max_ms=round(probe_latency_max_ms, 3),
+                           kitty_compression_used=compression_used,
                            peak_summed_rss_mib=peak_rss / 1024 if peak_rss else None,
                            average_cpu_one_core_percent=maximum_ticks / os.sysconf("SC_CLK_TCK") / elapsed * 100 if maximum_ticks else None,
                            last_application_sample=latest)
-            summary["frame_threshold_comparison"] = phases(output / "samples.jsonl", args.renderer)
+            summary["frame_threshold_comparison"] = comparison
+            summary["sustained_rate_acceptance"] = sustained
             (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
             print(json.dumps(summary, indent=2), flush=True)
             if not valid:
@@ -225,9 +263,15 @@ if __name__ == "__main__":
     parser.add_argument("--decode-height", type=int, default=720)
     parser.add_argument("--columns", type=int, default=100)
     parser.add_argument("--rows", type=int, default=32)
+    parser.add_argument("--probe-interval", type=float, default=30, help="seconds between keyboard/help probes")
+    parser.add_argument("--kitty-compression", action="store_true", help="emulate a successful Kitty zlib reply; encoder measurement only")
+    parser.add_argument("--maximum-rate-drop", type=float, help="fail if median rates after 5000 frames drop by more than this fraction; requires 20 samples in each phase")
     args = parser.parse_args()
     if os.name == "nt": parser.error("Use a Unix host/SSH server for the PTY benchmark; --metrics itself supports Windows")
     if not 2 <= args.duration <= 7200: parser.error("duration must be between 2 and 7200 seconds")
     if not 20 <= args.columns <= 500 or not 10 <= args.rows <= 200: parser.error("terminal dimensions are out of range")
     if not 1 <= args.fps <= 120 or not 0 <= args.decode_height <= 4320 or args.minimum_frames < 1: parser.error("invalid frame/decode limits")
+    if not 1 <= args.probe_interval <= 300: parser.error("probe interval must be between 1 and 300 seconds")
+    if args.kitty_compression and args.renderer != "kitty": parser.error("compression emulation requires --renderer kitty")
+    if args.maximum_rate_drop is not None and not 0 <= args.maximum_rate_drop < 1: parser.error("maximum rate drop must be in [0, 1)")
     benchmark(args)

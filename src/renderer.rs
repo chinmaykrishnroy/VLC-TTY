@@ -1294,7 +1294,7 @@ mod tests {
                 rate: 1.0,
                 frames: 1,
             };
-            let mut graphics = GraphicsRenderer::new(GraphicsChoice::Ansi, 15, None);
+            let mut graphics = GraphicsRenderer::new(GraphicsChoice::Ansi, 15, None, true);
             let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
             terminal
                 .draw(|f| {
@@ -1346,7 +1346,7 @@ mod tests {
         use ratatui::{backend::TestBackend, Terminal};
         let mut terminal = Terminal::new(TestBackend::new(100, 32)).unwrap();
         let app = App::new(Some(std::path::Path::new(".")));
-        let mut graphics = GraphicsRenderer::new(GraphicsChoice::Ansi, 60, None);
+        let mut graphics = GraphicsRenderer::new(GraphicsChoice::Ansi, 60, None, true);
         let info = PlaybackSnapshot {
             time_ms: 0,
             length_ms: 8000,
@@ -1377,7 +1377,7 @@ mod tests {
         let mut terminal = Terminal::new(TestBackend::new(90, 30)).unwrap();
         let mut app = App::new(Some(std::path::Path::new(".")));
         app.toggle_fullscreen();
-        let mut graphics = GraphicsRenderer::new(GraphicsChoice::Ansi, 60, None);
+        let mut graphics = GraphicsRenderer::new(GraphicsChoice::Ansi, 60, None, true);
         let info = PlaybackSnapshot {
             time_ms: 1000,
             length_ms: 2000,

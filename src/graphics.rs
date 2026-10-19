@@ -18,11 +18,7 @@ use ratatui::{
     layout::{Rect, Size},
     Frame,
 };
-use ratatui_image::{
-    picker::{Capability, ProtocolType},
-    protocol::Protocol,
-    FontSize, Image, Resize,
-};
+use ratatui_image::{picker::ProtocolType, protocol::Protocol, FontSize, Image, Resize};
 use std::sync::atomic::Ordering;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,10 +92,16 @@ pub struct GraphicsRenderer {
 }
 
 impl GraphicsRenderer {
-    pub fn new(choice: GraphicsChoice, max_fps: u32, metrics: Option<Arc<EncoderMetrics>>) -> Self {
+    pub fn new(
+        choice: GraphicsChoice,
+        max_fps: u32,
+        metrics: Option<Arc<EncoderMetrics>>,
+        allow_compression: bool,
+    ) -> Self {
         // Do this after entering raw mode, before the first crossterm read.
-        let (mut picker, startup_events) =
-            crate::terminal_probe::detect(choice != GraphicsChoice::Ansi);
+        let detection = crate::terminal_probe::detect(choice != GraphicsChoice::Ansi);
+        let mut picker = detection.picker;
+        let startup_events = detection.events;
         let detected = picker.protocol_type();
         if let Some(forced) = choice.forced_protocol() {
             picker.set_protocol_type(forced);
@@ -114,9 +116,7 @@ impl GraphicsRenderer {
         let font_size = picker.font_size();
         let is_tmux = picker.tmux_detected();
         let kitty_id = 0x5600_0000 | (std::process::id() & 0x00ff_ffff);
-        let compress = picker
-            .capabilities()
-            .contains(&Capability::KittyCompression);
+        let compress = detection.kitty_compression && allow_compression;
         let worker_metrics = metrics.clone();
         let encode_latency_us = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let worker_latency = encode_latency_us.clone();
@@ -509,6 +509,122 @@ fn bgra_to_rgb(frame: &VideoFrame) -> Option<RgbImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn protocol_output(proto: &Protocol) -> String {
+        use ratatui::{buffer::Buffer, widgets::Widget};
+        let size = proto.size();
+        let mut buf = Buffer::empty(Rect::new(0, 0, size.width, size.height));
+        Image::new(proto).render(buf.area, &mut buf);
+        buf.content.iter().map(|cell| cell.symbol()).collect()
+    }
+
+    #[test]
+    fn compressed_kitty_preserves_pixels_and_reduces_compressible_payload() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        use std::io::Read;
+        let frame = VideoFrame {
+            width: 32,
+            height: 16,
+            pitch: 32 * 4,
+            bgra: [20, 60, 130, 255].repeat(32 * 16),
+            serial: 1,
+        };
+        let mut outputs = Vec::new();
+        for compress in [false, true] {
+            let proto = encode_pixels(
+                &frame,
+                Size::new(8, 2),
+                FontSize::new(8, 16),
+                ProtocolType::Kitty,
+                false,
+                12345,
+                compress,
+            )
+            .unwrap();
+            let output = protocol_output(&proto);
+            assert_eq!(output.contains("o=z"), compress);
+            assert!(output.contains("t=d") && output.contains("i=12345"));
+            let payload: String = output
+                .split("\x1b_G")
+                .skip(1)
+                .map(|part| {
+                    part.split_once(';')
+                        .unwrap()
+                        .1
+                        .split("\x1b\\")
+                        .next()
+                        .unwrap()
+                })
+                .collect();
+            let bytes = STANDARD.decode(payload).unwrap();
+            let pixels = if compress {
+                let mut decoded = Vec::new();
+                flate2::read::ZlibDecoder::new(bytes.as_slice())
+                    .read_to_end(&mut decoded)
+                    .unwrap();
+                decoded
+            } else {
+                bytes
+            };
+            assert_eq!(pixels, [130, 60, 20, 255].repeat(64 * 32));
+            outputs.push(output.len());
+        }
+        assert!(
+            outputs[1] < outputs[0] / 10,
+            "compression should reduce flat artwork: {outputs:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "manual encoder measurement, not a real terminal FPS benchmark"]
+    fn kitty_encoding_benchmark() {
+        let mut frame = VideoFrame {
+            width: 1280,
+            height: 720,
+            pitch: 1280 * 4,
+            bgra: vec![0; 1280 * 720 * 4],
+            serial: 1,
+        };
+        for noisy in [false, true] {
+            let mut seed = 1234567u32;
+            for (i, px) in frame.bgra.chunks_exact_mut(4).enumerate() {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                let pixel = if noisy {
+                    seed.to_le_bytes()
+                } else {
+                    [
+                        (i % 1280 / 5) as u8,
+                        (i / 1280 / 3) as u8,
+                        (i / 1280 / 8) as u8,
+                        255,
+                    ]
+                };
+                px.copy_from_slice(&pixel);
+            }
+            for compress in [false, true] {
+                let mut bytes = 0;
+                let mut elapsed = Duration::ZERO;
+                for _ in 0..8 {
+                    let start = Instant::now();
+                    let proto = encode_pixels(
+                        &frame,
+                        Size::new(100, 32),
+                        FontSize::new(10, 20),
+                        ProtocolType::Kitty,
+                        false,
+                        12345,
+                        compress,
+                    )
+                    .unwrap();
+                    elapsed += start.elapsed();
+                    bytes += protocol_output(&proto).len();
+                }
+                println!("{{\"noisy\":{noisy},\"compressed\":{compress},\"mean_encode_us\":{},\"mean_protocol_bytes\":{}}}", elapsed.as_micros() / 8, bytes / 8);
+            }
+        }
+    }
     fn test_sixel() -> Protocol {
         Protocol::Sixel(ratatui_image::protocol::sixel::Sixel {
             data: "\x1bPq#0~-\x1b\\".into(),
@@ -519,7 +635,7 @@ mod tests {
 
     #[test]
     fn invalidation_rejects_old_frame_even_at_same_dimensions() {
-        let mut renderer = GraphicsRenderer::new(GraphicsChoice::Ansi, 60, None);
+        let mut renderer = GraphicsRenderer::new(GraphicsChoice::Ansi, 60, None, true);
         let (sender, receiver) = latest::channel();
         renderer.responses = receiver;
         let size = Size::new(2, 1);

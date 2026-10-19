@@ -1,6 +1,6 @@
 //! Bounded native-console probing. Preserve original input records so shortcuts,
 //! modifiers, mouse events and resizes still reach Crossterm after the query.
-use ratatui_image::picker::cap_parser::{Parser, QueryStdioOptions};
+use ratatui_image::picker::cap_parser::Parser;
 use std::{
     io::Write,
     time::{Duration, Instant},
@@ -17,11 +17,11 @@ enum Sequence {
 }
 
 fn classify(bytes: &[u8]) -> Sequence {
-    const KITTY: &[u8] = b"\x1b_Gi=31;";
-    if bytes == b"\x1b" || KITTY.starts_with(bytes) {
+    const KITTY: [&[u8]; 2] = [b"\x1b_Gi=31;", b"\x1b_Gi=32;"];
+    if bytes == b"\x1b" || KITTY.iter().any(|prefix| prefix.starts_with(bytes)) {
         return Sequence::Pending;
     }
-    if bytes.starts_with(KITTY) {
+    if KITTY.iter().any(|prefix| bytes.starts_with(prefix)) {
         return if bytes.ends_with(b"\x1b\\") {
             Sequence::Reply
         } else {
@@ -72,7 +72,7 @@ pub(super) fn query_bytes() -> Vec<u8> {
     if unsafe { GetConsoleMode(input, &mut mode) } == 0 {
         return Vec::new();
     }
-    let query = Parser::query(false, QueryStdioOptions::default());
+    let query = Parser::query(false, super::query_options());
     if std::io::stdout()
         .write_all(query.as_bytes())
         .and_then(|_| std::io::stdout().flush())
@@ -171,6 +171,7 @@ mod tests {
             b"\x1b[6;20;10t",
             b"\x1b[0n",
             b"\x1b_Gi=31;OK\x1b\\",
+            b"\x1b_Gi=32;OK\x1b\\",
         ] {
             for n in 1..reply.len() {
                 assert!(

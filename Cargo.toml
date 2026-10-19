@@ -35,6 +35,9 @@ crossbeam-queue = "0.3"
 cpal = { version = "0.16", optional = true }
 ureq = { version = "3", default-features = false }
 
+[dev-dependencies]
+base64 = "0.22"
+
 [target.'cfg(unix)'.dependencies]
 signal-hook = "0.3"
 libc = "0.2"

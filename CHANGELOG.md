@@ -2,6 +2,9 @@
 
 ## 0.0.1 (first public version, in development)
 
+- Negotiate Kitty zlib compression through the bounded terminal probe, preserving raw inline transfer when unsupported; add `--no-kitty-compression` for lower CPU cost. Verify lossless pixels and Windows reply/input handling.
+- Exercise actual keyboard/help probes in short ARM64 pixel smoke checks while preserving their frame minimum; add explicit compressed-protocol emulation for reproducible encoder measurements.
+- Add a manual 30/60/120-minute synthetic codec stress workflow and an optional measured rate-drop gate across 5,000 frames.
 - Display readable stream filenames, live LibVLC title/artist/album tags and embedded MP3 covers over SSH; fetch only bounded ID3 ranges on a background worker and reject stale covers after track changes.
 - Restore Windows automatic pixel-graphics detection for dropped audio artwork and video with a bounded native console probe; preserve early shortcuts and keep ANSI fallback for unsupported terminals.
 - Stream original remote file bytes over SSH into local LibVLC with byte-range seeking; no remote player or transcoding required.

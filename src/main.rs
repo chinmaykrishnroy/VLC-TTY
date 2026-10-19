@@ -299,6 +299,7 @@ fn run() -> Result<()> {
         opts.graphics,
         opts.fps,
         recorder.as_ref().map(|recorder| recorder.encoder.clone()),
+        opts.kitty_compression,
     );
     if opts.graphics == GraphicsChoice::Auto {
         app.notify(format!(

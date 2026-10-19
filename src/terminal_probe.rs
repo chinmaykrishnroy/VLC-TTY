@@ -7,7 +7,7 @@ use ratatui::crossterm::{
 };
 use ratatui_image::{
     picker::{
-        cap_parser::{Parser, Response},
+        cap_parser::{Parser, QueryStdioOptions, Response},
         Picker, ProtocolType,
     },
     FontSize,
@@ -16,7 +16,20 @@ use std::collections::VecDeque;
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 
-pub fn detect(query: bool) -> (Picker, VecDeque<Event>) {
+pub struct Detection {
+    pub picker: Picker,
+    pub events: VecDeque<Event>,
+    pub kitty_compression: bool,
+}
+
+pub(super) fn query_options() -> QueryStdioOptions {
+    QueryStdioOptions {
+        kitty_compression: true,
+        ..QueryStdioOptions::default()
+    }
+}
+
+pub fn detect(query: bool) -> Detection {
     let fallback = terminal::window_size()
         .ok()
         .and_then(|s| {
@@ -27,10 +40,9 @@ pub fn detect(query: bool) -> (Picker, VecDeque<Event>) {
             }
         })
         .unwrap_or(FontSize::new(10, 20));
-    let mut font = fallback;
     let env = std::env::var("TERM_PROGRAM").unwrap_or_default();
     let term = std::env::var("TERM").unwrap_or_default();
-    let mut protocol = if !query {
+    let protocol = if !query {
         ProtocolType::Halfblocks
     } else if env == "iTerm.app" || env == "WezTerm" {
         ProtocolType::Iterm2
@@ -39,12 +51,24 @@ pub fn detect(query: bool) -> (Picker, VecDeque<Event>) {
     } else {
         ProtocolType::Halfblocks
     };
+    parse_responses(
+        fallback,
+        protocol,
+        if query { query_bytes() } else { Vec::new() },
+    )
+}
+
+fn parse_responses(
+    mut font: FontSize,
+    mut protocol: ProtocolType,
+    responses: Vec<u8>,
+) -> Detection {
     let mut events = VecDeque::new();
-    if query {
+    let mut kitty_compression = false;
+    {
         let mut parser = Parser::new();
         let mut sequence = Vec::new();
         let mut text = Vec::new();
-        let responses = query_bytes();
         for byte in responses {
             if sequence.is_empty() && byte != 0x1b {
                 text.push(byte);
@@ -56,6 +80,7 @@ pub fn detect(query: bool) -> (Picker, VecDeque<Event>) {
                 for response in found {
                     match response {
                         Response::Kitty => protocol = ProtocolType::Kitty,
+                        Response::KittyCompression => kitty_compression = true,
                         Response::Sixel if protocol != ProtocolType::Kitty => {
                             protocol = ProtocolType::Sixel
                         }
@@ -100,15 +125,18 @@ pub fn detect(query: bool) -> (Picker, VecDeque<Event>) {
     #[allow(deprecated)]
     let mut picker = Picker::from_fontsize(font);
     picker.set_protocol_type(protocol);
-    (picker, events)
+    Detection {
+        picker,
+        events,
+        kitty_compression,
+    }
 }
 
 #[cfg(unix)]
 fn query_bytes() -> Vec<u8> {
-    use ratatui_image::picker::cap_parser::QueryStdioOptions;
     use std::io::Write;
     let is_tmux = std::env::var_os("TMUX").is_some();
-    let query = Parser::query(is_tmux, QueryStdioOptions::default());
+    let query = Parser::query(is_tmux, query_options());
     if std::io::stdout()
         .write_all(query.as_bytes())
         .and_then(|_| std::io::stdout().flush())
@@ -154,4 +182,42 @@ fn query_bytes() -> Vec<u8> {
 #[cfg(not(any(unix, windows)))]
 fn query_bytes() -> Vec<u8> {
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compression_query_and_success_survive_the_synchronous_probe() {
+        let query = Parser::query(false, query_options());
+        assert!(
+            query.contains("i=32") && query.contains("o=z"),
+            "compression must actually be probed"
+        );
+        let result = parse_responses(
+            FontSize::new(10, 20),
+            ProtocolType::Halfblocks,
+            b"\x1b_Gi=31;OK\x1b\\\x1b_Gi=32;OK\x1b\\".to_vec(),
+        );
+        assert_eq!(result.picker.protocol_type(), ProtocolType::Kitty);
+        assert!(
+            result.kitty_compression,
+            "confirmed compression was discarded"
+        );
+    }
+
+    #[test]
+    fn absent_or_rejected_compression_never_enables_it() {
+        for replies in [
+            b"".as_slice(),
+            b"\x1b_Gi=31;OK\x1b\\",
+            b"\x1b_Gi=31;OK\x1b\\\x1b_Gi=32;EINVAL\x1b\\",
+        ] {
+            assert!(
+                !parse_responses(FontSize::new(10, 20), ProtocolType::Kitty, replies.to_vec())
+                    .kitty_compression
+            );
+        }
+    }
 }

@@ -15,6 +15,7 @@ Usage: vlc-tty [OPTIONS] [FILE|FOLDER|URL]\n\n\
   --audio-endpoint ADDR Loopback receiver address for remote output\n\
   --audio-token-file PATH Private session key for remote output\n\
   --graphics MODE       auto|kitty|sixel|iterm2|ansi (default: auto)\n\
+  --no-kitty-compression Keep raw Kitty transfers to reduce compression CPU cost\n\
   --fps N               Draw/encode limit, 1–120 (local default: 60)\n\
   --decode-height N     Callback cap, 0–4320; 0 uncapped (local: 1080)\n\
   --subtitle PATH       Load an external subtitle file\n\

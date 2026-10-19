@@ -127,8 +127,9 @@ jobs:
         run: python3 scripts/pty_smoke.py target/debug/vlc-tty samples/sample.mp4 --expect-caption TermVLC
       - name: Forced pixel protocols must retain keyboard input after probe timeout
         run: |
-          python3 scripts/benchmark_playback.py target/debug/vlc-tty samples/sample.mp4 --renderer kitty --duration 12 --output "$RUNNER_TEMP/vlc-tty-benchmark-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-kitty"
-          python3 scripts/benchmark_playback.py target/debug/vlc-tty samples/sample.mp4 --renderer sixel --duration 12 --output "$RUNNER_TEMP/vlc-tty-benchmark-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-sixel"
+          python3 scripts/benchmark_playback.py target/debug/vlc-tty samples/sample.mp4 --renderer kitty --duration 30 --probe-interval 3 --output "$RUNNER_TEMP/vlc-tty-benchmark-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-kitty"
+          python3 scripts/benchmark_playback.py target/debug/vlc-tty samples/sample.mp4 --renderer kitty --kitty-compression --duration 30 --probe-interval 3 --output "$RUNNER_TEMP/vlc-tty-benchmark-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-kitty-zlib"
+          python3 scripts/benchmark_playback.py target/debug/vlc-tty samples/sample.mp4 --renderer sixel --duration 30 --probe-interval 3 --output "$RUNNER_TEMP/vlc-tty-benchmark-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-sixel"
       - uses: actions/upload-artifact@v7
         if: always()
         with:

@@ -16,6 +16,7 @@ pub struct Options {
     pub volume: i32,
     pub rate: f32,
     pub graphics: GraphicsChoice,
+    pub kitty_compression: bool,
     pub fps: u32,
     pub decode_height: u32,
     pub native_window: bool,
@@ -47,6 +48,7 @@ impl Options {
             volume: 100,
             rate: 1.0,
             graphics: GraphicsChoice::Auto,
+            kitty_compression: true,
             fps: 60,
             decode_height: 1080,
             native_window: false,
@@ -89,6 +91,7 @@ impl Options {
                         | "--audio"
                         | "--native-window"
                         | "--shuffle"
+                        | "--no-kitty-compression"
                 )
             {
                 bail!("{name} does not take an inline value");
@@ -129,6 +132,7 @@ impl Options {
                 }
                 "--rate" => out.rate = value()?.parse().context("--rate must be a number")?,
                 "--graphics" => out.graphics = value()?.parse().map_err(anyhow::Error::msg)?,
+                "--no-kitty-compression" => out.kitty_compression = false,
                 "--subtitle" => out.subtitle = Some(value()?),
                 "--fps" => {
                     fps = Some(
@@ -265,6 +269,19 @@ mod tests {
                 (24, 0, AudioOutput::Local)
             );
         }
+    }
+    #[test]
+    fn kitty_compression_can_be_disabled_without_changing_renderer_or_ssh_defaults() {
+        assert!(parse(&[], false).unwrap().kitty_compression);
+        let options = parse(
+            &["--ssh", "--graphics", "kitty", "--no-kitty-compression"],
+            false,
+        )
+        .unwrap();
+        assert!(!options.kitty_compression);
+        assert_eq!(options.graphics, GraphicsChoice::Kitty);
+        assert_eq!(options.fps, 15);
+        assert!(parse(&["--no-kitty-compression=true"], false).is_err());
     }
     #[test]
     fn audio_modes_require_an_authenticated_loopback_receiver() {

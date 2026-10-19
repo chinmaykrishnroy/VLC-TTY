@@ -20,7 +20,7 @@
 - Play/pause, seek, stop, speed control and frame stepping.
 - File browser, UTF-8 M3U playlists, shuffle and repeat modes.
 - External SRT/VTT captions, track selection and subtitle timing controls.
-- Kitty, Sixel and iTerm2 pixel graphics, plus ANSI half-block fallback.
+- Kitty, Sixel and iTerm2 pixel graphics, plus ANSI half-block fallback. Kitty uses lossless compression when confirmed by the terminal; `--no-kitty-compression` opts out.
 - Silent SSH profile with bounded decode size and frame rate.
 - Original compressed-file streaming over SSH with local decoding, speakers and seeking.
 - Experimental server-rendered playback with PCM audio forwarded to local speakers.

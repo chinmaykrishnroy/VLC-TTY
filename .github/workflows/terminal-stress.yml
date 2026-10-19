@@ -1,0 +1,85 @@
+name: Terminal pipeline stress (server metrics)
+
+on:
+  workflow_dispatch:
+    inputs:
+      duration_minutes:
+        description: Synthetic loop duration; no real terminal presentation measurement
+        type: choice
+        options: ['30', '60', '120']
+        default: '30'
+      renderer:
+        type: choice
+        options: [kitty, sixel, iterm2, ansi]
+        default: kitty
+      codec:
+        type: choice
+        options: [h264, h265, av1]
+        default: h264
+      runner:
+        type: choice
+        options: [ubuntu-24.04, ubuntu-24.04-arm]
+        default: ubuntu-24.04-arm
+      kitty_compression:
+        description: Emulate successful Kitty zlib negotiation (Kitty only)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  stress:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 150
+    env:
+      DURATION_MINUTES: ${{ inputs.duration_minutes }}
+      RENDERER: ${{ inputs.renderer }}
+      CODEC: ${{ inputs.codec }}
+      KITTY_COMPRESSION: ${{ inputs.kitty_compression }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: terminal-stress-${{ inputs.runner }}
+      - name: Install headless runtime and fixture tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libvlc5 vlc-plugin-base ffmpeg
+      - name: Build the headless release player
+        run: cargo build --locked --release --no-default-features --bin vlc-tty
+      - name: Generate a known synthetic codec fixture and record identity
+        run: |
+          case "$CODEC" in
+            h264) encoder=(-c:v libx264 -preset veryfast -crf 23) ;;
+            h265) encoder=(-c:v libx265 -preset ultrafast -crf 28 -x265-params pools=2) ;;
+            av1) encoder=(-c:v libsvtav1 -preset 12 -crf 35 -svtav1-params lp=2) ;;
+            *) exit 2 ;;
+          esac
+          ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=1280x720:rate=30 -t 10 -an "${encoder[@]}" -pix_fmt yuv420p "$RUNNER_TEMP/fixture.mkv"
+          mkdir -p "$RUNNER_TEMP/stress-identity"
+          git rev-parse HEAD > "$RUNNER_TEMP/stress-identity/commit.txt"
+          sha256sum "$RUNNER_TEMP/fixture.mkv" > "$RUNNER_TEMP/stress-identity/fixture.sha256"
+          ffprobe -v quiet -show_format -show_streams -of json "$RUNNER_TEMP/fixture.mkv" > "$RUNNER_TEMP/stress-identity/fixture.json"
+      - name: Require sustained progress and keyboard responsiveness
+        run: |
+          extra=()
+          if [[ "$RENDERER" == kitty && "$KITTY_COMPRESSION" == true ]]; then
+            extra+=(--kitty-compression)
+          fi
+          python3 scripts/benchmark_playback.py target/release/vlc-tty "$RUNNER_TEMP/fixture.mkv" \
+            --renderer "$RENDERER" --duration "$((DURATION_MINUTES * 60))" \
+            --fps 15 --decode-height 720 --minimum-frames 6000 --maximum-rate-drop 0.25 \
+            --output "$RUNNER_TEMP/stress-results" "${extra[@]}"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: server-stress-${{ inputs.renderer }}-${{ inputs.codec }}-${{ inputs.runner }}
+          path: |
+            ${{ runner.temp }}/stress-identity/
+            ${{ runner.temp }}/stress-results/
+          if-no-files-found: error
+          retention-days: 14
