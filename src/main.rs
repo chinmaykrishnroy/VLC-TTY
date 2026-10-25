@@ -322,12 +322,13 @@ fn run() -> Result<()> {
         app.fullscreen,
         app.media_revision,
         app.overlay,
-        app.active_menu,
+        app.active_menu.is_some(),
         app.input.is_some(),
         app.sidecar_enabled,
         app.fullscreen && app.show_osd(),
         app.fullscreen && app.subtitle_text(player.snapshot().time_ms).is_some(),
     );
+    let mut needs_screen_reset = false;
     let mut video_delay = audio::sync::VideoDelay::new();
     let mut last_draw = Instant::now() - Duration::from_secs(1);
     let interval = Duration::from_millis((1000 / opts.fps.max(1)) as u64);
@@ -375,16 +376,14 @@ fn run() -> Result<()> {
                         continue;
                     }
                     if matches!(event, Event::Resize(_, _)) {
-                        reset_fullscreen(&mut terminal)?;
-                        graphics.invalidate();
+                        needs_screen_reset = true;
                     }
                     match app.handle_event(event, &zones, &mut player)? {
                         app::AppEffect::Quit => return Ok(()),
                         app::AppEffect::ToggleRenderer => {
                             graphics.toggle_ansi();
                             app.notify(format!("Video renderer: {}", graphics.label()));
-                            reset_fullscreen(&mut terminal)?;
-                            graphics.invalidate();
+                            needs_screen_reset = true;
                         }
                         app::AppEffect::Continue => {}
                     }
@@ -402,15 +401,15 @@ fn run() -> Result<()> {
             app.fullscreen,
             app.media_revision,
             app.overlay,
-            app.active_menu,
+            // Switching open headers changes text, not the pixel/text mode.
+            app.active_menu.is_some(),
             app.input.is_some(),
             app.sidecar_enabled,
             app.fullscreen && app.show_osd(),
             app.fullscreen && app.subtitle_text(player.snapshot().time_ms).is_some(),
         );
         if previous_presentation != presentation {
-            reset_fullscreen(&mut terminal)?;
-            graphics.invalidate();
+            needs_screen_reset = true;
             previous_presentation = presentation;
         }
         let video_frame = player.latest_frame();
@@ -429,6 +428,7 @@ fn run() -> Result<()> {
             );
         }
         if !opts.native_window
+            && !needs_screen_reset
             && app.overlay == app::Overlay::None
             && app.active_menu.is_none()
             && app.input.is_none()
@@ -439,6 +439,12 @@ fn run() -> Result<()> {
             let info = player.snapshot();
             let sync_update = SynchronizedUpdate::enter()?;
             let draw_started = Instant::now();
+            if needs_screen_reset {
+                // Erase pixels and repaint text as one visible transition.
+                reset_fullscreen(&mut terminal)?;
+                graphics.invalidate();
+                needs_screen_reset = false;
+            }
             terminal.draw(|f| {
                 zones = renderer::draw(
                     f,

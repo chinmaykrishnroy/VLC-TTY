@@ -1,10 +1,13 @@
 //! Local subtitle support independent of terminal graphics and VLC video callbacks.
 //! LibVLC selects embedded tracks; text sidecars are rendered as a Ratatui overlay.
-//! This is deliberately limited to UTF-8 SRT/WebVTT (not ASS layout/styling).
+//! SRT/WebVTT text supports Unicode BOMs and legacy Western encodings.
+//! ASS layout/styling remains the native LibVLC path.
 use anyhow::{bail, Context, Result};
+use encoding_rs::{Encoding, WINDOWS_1252};
 use std::{
     borrow::Cow,
     fs,
+    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -13,6 +16,29 @@ pub struct Cue {
     pub start_ms: i64,
     pub end_ms: i64,
     pub text: String,
+}
+
+fn decode_text(bytes: &[u8]) -> Result<Cow<'_, str>> {
+    if let Some((encoding, prefix)) = Encoding::for_bom(bytes) {
+        let (text, errors) = encoding.decode_without_bom_handling(&bytes[prefix..]);
+        if errors {
+            bail!("Invalid {} subtitle text", encoding.name());
+        }
+        return Ok(text);
+    }
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        return Ok(Cow::Borrowed(text));
+    }
+    // Common legacy SRT files use Latin-1 / Windows-1252. Prefer valid
+    // UTF-8 first, and never reinterpret a malformed declared Unicode BOM.
+    if bytes.contains(&0) {
+        bail!("Unrecognized subtitle encoding; UTF-16 needs a byte-order mark");
+    }
+    let (text, errors) = WINDOWS_1252.decode_without_bom_handling(bytes);
+    if errors {
+        bail!("Cannot decode subtitle as UTF-8 or Windows-1252");
+    }
+    Ok(text)
 }
 
 #[derive(Debug, Clone)]
@@ -116,13 +142,18 @@ pub fn parse_text(raw: &str) -> Vec<Cue> {
 
 impl SubtitleFile {
     pub fn load(path: &Path) -> Result<Self> {
-        let md = fs::metadata(path)
+        let mut input = fs::File::open(path)
+            .with_context(|| format!("Cannot read subtitle {}", path.display()))?
+            .take(5_000_001);
+        let mut bytes = Vec::new();
+        input
+            .read_to_end(&mut bytes)
             .with_context(|| format!("Cannot read subtitle {}", path.display()))?;
-        if md.len() > 5_000_000 {
+        if bytes.len() > 5_000_000 {
             bail!("Subtitle file exceeds 5 MB");
         }
-        let raw = fs::read_to_string(path)
-            .with_context(|| format!("Subtitle must be UTF-8: {}", path.display()))?;
+        let raw = decode_text(&bytes)
+            .with_context(|| format!("Cannot decode subtitle {}", path.display()))?;
         let cues = parse_text(&raw);
         if cues.is_empty() {
             bail!("No readable subtitle cues in {}", path.display());
@@ -181,6 +212,55 @@ impl SubtitleFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn regression_legacy_and_unicode_subtitle_files_load() {
+        let text =
+            "1\r\n00:00:01,000 --> 00:00:03,000\r\nCaf\u{e9} \u{2014} \u{201c}hello\u{201d}\r\n";
+        let legacy =
+            b"1\r\n00:00:01,000 --> 00:00:03,000\r\nCaf\xe9 \x97 \x93hello\x94\r\n".to_vec();
+        let mut utf8_bom = vec![0xef, 0xbb, 0xbf];
+        utf8_bom.extend_from_slice(text.as_bytes());
+        let mut little = vec![0xff, 0xfe];
+        let mut big = vec![0xfe, 0xff];
+        for unit in text.encode_utf16() {
+            little.extend_from_slice(&unit.to_le_bytes());
+            big.extend_from_slice(&unit.to_be_bytes());
+        }
+        let dir = tempfile::tempdir().unwrap();
+        for (name, bytes) in [
+            ("legacy.srt", legacy),
+            ("utf8.srt", text.as_bytes().to_vec()),
+            ("bom.srt", utf8_bom),
+            ("little.srt", little),
+            ("big.srt", big),
+        ] {
+            let path = dir.path().join(name);
+            fs::write(&path, bytes).unwrap();
+            let loaded = SubtitleFile::load(&path).unwrap_or_else(|e| panic!("{name}: {e:#}"));
+            assert_eq!(
+                loaded.current(1500, 0).as_deref(),
+                Some("Caf\u{e9} \u{2014} \u{201c}hello\u{201d}")
+            );
+        }
+    }
+    #[test]
+    fn declared_unicode_errors_are_not_reinterpreted_as_legacy_text() {
+        for bytes in [
+            b"\xef\xbb\xbf\xe9".as_slice(),
+            b"\xff\xfe\x61",
+            b"\xfe\xff\xd8\x00",
+        ] {
+            assert!(decode_text(bytes).is_err());
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("oversized.srt");
+        fs::write(&path, vec![b' '; 5_000_001]).unwrap();
+        assert!(SubtitleFile::load(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("exceeds 5 MB"));
+    }
+
     #[test]
     fn malformed_timestamps_cannot_overflow_or_go_negative() {
         assert_eq!(timestamp("18446744073709551615:00:00.000"), None);

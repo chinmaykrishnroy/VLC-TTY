@@ -1522,6 +1522,16 @@ impl App {
             }
         }
 
+        // Open menus consume wheel input; never change controls underneath.
+        if self.active_menu.is_some()
+            && matches!(
+                evt.kind,
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+            )
+        {
+            return Ok(AppEffect::Continue);
+        }
+
         // Close menu if clicked anywhere else
         if self.active_menu.is_some() && matches!(evt.kind, MouseEventKind::Down(MouseButton::Left))
         {
@@ -1660,6 +1670,15 @@ impl App {
                     player.set_volume(new_vol);
                 }
             }
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+                if !self.fullscreen && hit(zones.timeline, x, y) =>
+            {
+                if player.snapshot().length_ms > 0 {
+                    let forward = evt.kind == MouseEventKind::ScrollUp;
+                    player.seek_relative(if forward { 10_000 } else { -10_000 });
+                    self.notify(if forward { "Seek +10s" } else { "Seek -10s" });
+                }
+            }
             MouseEventKind::ScrollDown
                 if self.view_mode != ViewMode::Player && !self.fullscreen =>
             {
@@ -1709,6 +1728,95 @@ mod tests {
 
     use super::*;
     use crate::playback::test_support::FakePlayback;
+
+    #[test]
+    fn regression_timeline_wheel_seeks_without_changing_volume() {
+        for view in [ViewMode::Player, ViewMode::Playlist] {
+            let mut app = App::new(None);
+            app.view_mode = view;
+            let mut player = FakePlayback::default();
+            let zones = HitZones {
+                timeline: Some(Rect::new(10, 5, 40, 1)),
+                ..Default::default()
+            };
+            for kind in [MouseEventKind::ScrollUp, MouseEventKind::ScrollDown] {
+                app.handle_mouse(
+                    MouseEvent {
+                        kind,
+                        column: 20,
+                        row: 5,
+                        modifiers: KeyModifiers::NONE,
+                    },
+                    &zones,
+                    &mut player,
+                )
+                .unwrap();
+            }
+            assert_eq!(
+                player.seeks,
+                [10_000, -10_000],
+                "Wheel over the timeline must seek in {view:?}"
+            );
+            assert_eq!((app.volume, player.volume), (100, 100));
+            if view == ViewMode::Player {
+                app.handle_mouse(
+                    MouseEvent {
+                        kind: MouseEventKind::ScrollUp,
+                        column: 20,
+                        row: 4,
+                        modifiers: KeyModifiers::NONE,
+                    },
+                    &zones,
+                    &mut player,
+                )
+                .unwrap();
+                assert_eq!(
+                    (app.volume, player.volume),
+                    (101, 101),
+                    "Wheel outside the timeline keeps volume control"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn modal_wheel_does_not_seek_or_change_volume() {
+        for mode in 0..3 {
+            let mut app = App::new(None);
+            match mode {
+                0 => app.active_menu = Some(MenuKind::Playback),
+                1 => app.overlay = Overlay::Info,
+                _ => {
+                    app.input = Some(InputDialog {
+                        purpose: InputPurpose::Subtitle,
+                        text: String::new(),
+                    })
+                }
+            }
+            let zones = HitZones {
+                timeline: Some(Rect::new(10, 5, 40, 1)),
+                ..Default::default()
+            };
+            let mut player = FakePlayback::default();
+            for row in [5, 6] {
+                for kind in [MouseEventKind::ScrollUp, MouseEventKind::ScrollDown] {
+                    app.handle_mouse(
+                        MouseEvent {
+                            kind,
+                            column: 20,
+                            row,
+                            modifiers: KeyModifiers::NONE,
+                        },
+                        &zones,
+                        &mut player,
+                    )
+                    .unwrap();
+                }
+            }
+            assert!(player.seeks.is_empty());
+            assert_eq!((app.volume, player.volume), (100, 100));
+        }
+    }
 
     #[test]
     fn streamed_tags_update_while_playback_state_stays_playing() {

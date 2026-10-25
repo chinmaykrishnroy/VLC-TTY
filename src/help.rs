@@ -40,7 +40,8 @@ Keyboard: Space pause; s stop; f/F11 fullscreen; arrows seek; +/- volume;\n\
 m mute; [/] speed; = normal speed; e next frame; n/p next/previous;\n\
 z shuffle; Shift+R repeat off/all/one;\n\
 Tab queue; o open; l captions; Shift+S/A track menus; ,/. subtitle delay;\n\
-j/k audio delay; g renderer; i info; ? help; q quit.\n\n\
+j/k audio delay; g renderer; i info; ? help; q quit.\n\
+Mouse wheel: timeline seeks +/-10s; elsewhere in the player adjusts volume.\n\n\
 Examples:\n\
   vlc-tty movie.mp4\n\
   vlc-tty --ssh --silent --graphics ansi movie.mkv\n\

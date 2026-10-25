@@ -756,6 +756,7 @@ fn overlay(
                 "",
                 "DRAG & DROP: Drag any video, audio, or subtitle from Explorer",
                 "directly into the terminal to start playing immediately.",
+                "MOUSE WHEEL: Timeline seeks +/-10s; elsewhere adjusts volume.",
             ];
             f.render_widget(
                 Paragraph::new(text.join("\n"))

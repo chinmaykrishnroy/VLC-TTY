@@ -75,6 +75,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/windows_graphics_smoke.py $player --mode menu-hover --host-directory target/graphics-test-host
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python scripts/windows_graphics_smoke.py $player --mode menu-hover-sixel --host-directory target/graphics-test-host
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/windows_graphics_smoke.py $player --mode fullscreen --host-directory target/graphics-test-host
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/windows_graphics_smoke.py $player --mode no-sixel

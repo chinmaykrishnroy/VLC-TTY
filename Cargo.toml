@@ -21,6 +21,7 @@ path = "src/portable/main.rs"
 
 [dependencies]
 anyhow = "1"
+encoding_rs = "0.8"
 libloading = "0.8"
 ratatui = { version = "0.30.0", features = ["crossterm"] }
 ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm"] }

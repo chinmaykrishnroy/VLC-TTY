@@ -19,7 +19,7 @@
 - Local files, folders and network URLs through LibVLC.
 - Play/pause, seek, stop, speed control and frame stepping.
 - File browser, UTF-8 M3U playlists, shuffle and repeat modes.
-- External SRT/VTT captions, track selection and subtitle timing controls.
+- External SRT/VTT captions (UTF-8, BOM-marked UTF-16 and Windows-1252), track selection and subtitle timing controls.
 - Kitty, Sixel and iTerm2 pixel graphics, plus ANSI half-block fallback. Kitty uses lossless compression when confirmed by the terminal; `--no-kitty-compression` opts out.
 - Sixel video follows the widget's pixel size on resize. Adaptive colour-palette training preserves spatial detail, with light dithering for gradients; static album artwork keeps its full-detail encoder.
 - Silent SSH profile with bounded decode size and frame rate.
@@ -93,7 +93,7 @@ The smoke check requires decoded frames and an advancing playback clock, without
 | `g` | Toggle pixel graphics / ANSI fallback |
 | `?` / `i` / `q` | Help / media information / quit |
 
-Mouse controls and menus are available where terminal mouse reporting is supported. Hover highlights menu headers and dropdown rows; with a menu open, moving across headers switches menus. Commands activate on click or Enter. Fullscreen also requests local Windows Terminal window fullscreen through its default F11 binding, with geometry confirmation and restoration on exit. Other hosts and server-side SSH playback use the terminal's own fullscreen shortcut; see the [fullscreen guide](docs/WINDOWS-TERMINAL.md).
+Mouse controls and menus are available where terminal mouse reporting is supported. Hover highlights menu headers and dropdown rows; with a menu open, moving across headers switches menus. Commands activate on click or Enter. Scroll over the timeline to seek 10 seconds forward/backward; elsewhere in the player, the wheel changes volume. Open menus and dialogs consume wheel events. Fullscreen also requests local Windows Terminal window fullscreen through its default F11 binding, with geometry confirmation and restoration on exit. Other hosts and server-side SSH playback use the terminal's own fullscreen shortcut; see the [fullscreen guide](docs/WINDOWS-TERMINAL.md).
 
 For outer borders in Windows Terminal, set profile padding to `0` and hide its scrollbar; see the [terminal appearance guide](docs/WINDOWS-TERMINAL.md). Artwork/video keeps its aspect ratio, so differently shaped media can still have black bars.
 

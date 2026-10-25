@@ -156,7 +156,7 @@ class Console:
                 self.send(b"\x1b[1;1R")
                 self.cursor_queries = queries
             if self.mode != "timeout":
-                for query, reply in [(b"\x1b[c", b"\x1b[?62;4c" if self.mode in {"sixel", "fullscreen"} else b"\x1b[?1;2c"),
+                for query, reply in [(b"\x1b[c", b"\x1b[?62;4c" if self.mode in {"sixel", "fullscreen", "menu-hover-sixel"} else b"\x1b[?1;2c"),
                                      (b"\x1b[16t", b"\x1b[6;20;10t"), (b"\x1b[5n", b"\x1b[0n")]:
                     count = data.count(query)
                     if count > self.answered.get(query, 0):
@@ -168,7 +168,7 @@ class Console:
                 time.sleep(0.2)
                 raise AssertionError(f"Player exited before expected output: {bytes(self.data)[-1600:]!r}")
             time.sleep(0.01)
-        raise AssertionError("Timed out waiting for terminal output")
+        raise AssertionError(f"Timed out waiting for terminal output: {bytes(self.data)[-1600:]!r}")
 
     def close(self):
         if self.k.WaitForSingleObject(self.process, 0) != 0:
@@ -221,21 +221,39 @@ def smoke(binary, mode="sixel", host=None, startup_timeout=20):
                 terminal.wait_for(lambda data: b"KEYBOARD CONTROLS" in data)
                 assert b"ANSI half-block" in terminal.data, "Unanswered query did not retain ANSI fallback"
                 terminal.send(b"\x1b")
-            elif mode == "menu-hover":
-                terminal.wait_for(lambda data: b"ANSI half-block" in data)
+            elif mode in {"menu-hover", "menu-hover-sixel"}:
+                pixel_menu = mode == "menu-hover-sixel"
+                terminal.wait_for(lambda data: (b"Sixel pixel graphics" if pixel_menu else b"ANSI half-block") in data)
+                if pixel_menu:
+                    start = len(terminal.data)
+                    terminal.send(('"' + str(path) + '"').encode())
+                    terminal.wait_for(lambda data: re.search(rb"\x1bP[0-9;]*q", data[start:]))
                 start = len(terminal.data)
                 terminal.send(b"\x1b[<35;12;1M")
                 terminal.wait_for(lambda data: b"48;2;48;54;62" in data[start:])
                 assert b"Play / Pause" not in terminal.data[start:], "Closed menu opened on hover"
+                start = len(terminal.data)
                 terminal.send(b"\x1b[<0;12;1M\x1b[<0;12;1m")
-                terminal.wait_for(lambda data: b"Play / Pause" in data[start:])
+                data = terminal.wait_for(lambda data: b"Play / Pause" in data[start:])
+                assert_synchronized_clears(data[start:])
                 start = len(terminal.data)
                 terminal.send(b"\x1b[<35;12;4M")
                 terminal.wait_for(lambda data: b"48;2;74;203;216" in data[start:] and b"Stop" in data[start:])
                 start = len(terminal.data)
                 terminal.send(b"\x1b[<35;22;1M")
-                terminal.wait_for(lambda data: b"Cycle Audio Track" in data[start:] and b"Volume Up" in data[start:])
+                data = terminal.wait_for(lambda data: "Cycle Audio Track" in visible_text(data) and "Volume Up" in visible_text(data))
+                assert b"\x1b[2J" not in data[start:], "Hovering Playback -> Audio erased the whole screen (menu flicker)"
+                for column, label in [(30, b"Toggle Renderer"), (22, b"Cycle Audio Track"), (12, b"Play / Pause")]:
+                    start = len(terminal.data)
+                    terminal.send(f"\x1b[<35;{column};1M".encode())
+                    data = terminal.wait_for(lambda data: label.decode() in visible_text(data))
+                    assert b"\x1b[2J" not in data[start:], "Switching open menu headers erased the whole screen"
+                    assert not re.search(rb"\x1bP[0-9;]*q", data[start:]), "Pixel frame overwrote an open menu"
+                start = len(terminal.data)
                 terminal.send(b"\x1b")
+                if pixel_menu:
+                    data = terminal.wait_for(lambda data: re.search(rb"\x1bP[0-9;]*q", data[start:]))
+                    assert_synchronized_clears(data[start:])
             elif mode == "fullscreen":
                 terminal.send(('"' + str(path) + '"').encode())
                 # Startup fullscreen, overlay expiry, and both resize directions
@@ -263,13 +281,76 @@ def smoke(binary, mode="sixel", host=None, startup_timeout=20):
             assert b"\x1b[?1049l" in terminal.data, "Alternate screen was not restored"
             checked = (
                 "fullscreen startup, resize containment and Escape" if mode == "fullscreen"
-                else "menu hover and header switching" if mode == "menu-hover"
+                else "menu hover and header switching" if mode in {"menu-hover", "menu-hover-sixel"}
                 else "dropped Sixel artwork" if mode == "sixel"
                 else "fallback and startup input"
             )
             print(f"Windows console graphics smoke passed: {mode}; {checked}, quit and terminal restoration")
         finally:
             terminal.close()
+
+
+def assert_synchronized_clears(data):
+    synchronized = False
+    for command in re.findall(rb"\x1b\[\?2026[hl]|\x1b\[2J", data):
+        if command == b"\x1b[2J":
+            assert synchronized, "Menu transition cleared the screen outside its synchronized redraw"
+        else:
+            synchronized = command.endswith(b"h")
+
+
+def visible_text(data, columns=100, rows=32):
+    """Project the console's text updates; labels may span several diff writes.
+
+    This only models text/cursor/erase commands used by the smoke fixture.
+    Sixel/OSC payloads and styling do not occupy text cells.
+    """
+    screen = [[" "] * columns for _ in range(rows)]
+    x = y = 0
+    tokens = re.finditer(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b[P\]].*?(?:\x1b\\|\x07|$)|[^\x1b]+|\x1b.",
+                         data.decode("utf-8", errors="replace"), re.S)
+    for token in tokens:
+        value = token.group()
+        if value.startswith("\x1b["):
+            parameters, command = value[2:-1], value[-1]
+            if parameters.startswith("?"):
+                continue
+            args = [int(n or 0) for n in parameters.split(";")] if parameters else [0]
+            amount = args[0] or 1
+            if command in "Hf":
+                y, x = amount - 1, (args[1] or 1) - 1 if len(args) > 1 else 0
+            elif command == "G":
+                x = amount - 1
+            elif command == "d":
+                y = amount - 1
+            elif command == "A":
+                y -= amount
+            elif command == "B":
+                y += amount
+            elif command == "C":
+                x += amount
+            elif command == "D":
+                x -= amount
+            elif command == "J" and args[0] in {2, 3}:
+                screen = [[" "] * columns for _ in range(rows)]
+            elif command == "K":
+                start, end = (0, columns) if args[0] == 2 else (0, x + 1) if args[0] == 1 else (x, columns)
+                screen[min(rows - 1, max(0, y))][start:end] = [" "] * (end - start)
+            x, y = min(columns - 1, max(0, x)), min(rows - 1, max(0, y))
+        elif not value.startswith("\x1b"):
+            for char in value:
+                if char == "\r":
+                    x = 0
+                elif char == "\n":
+                    y = min(rows - 1, y + 1)
+                elif char == "\b":
+                    x = max(0, x - 1)
+                elif char >= " ":
+                    if x >= columns:
+                        x, y = 0, min(rows - 1, y + 1)
+                    screen[y][x] = char
+                    x += 1
+    return "\n".join("".join(row) for row in screen)
 
 
 if __name__ == "__main__":
@@ -287,7 +368,7 @@ if __name__ == "__main__":
             os.close(outgoing)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("binary", type=Path)
-    parser.add_argument("--mode", choices=["sixel", "no-sixel", "timeout", "menu-hover", "fullscreen"], default="sixel")
+    parser.add_argument("--mode", choices=["sixel", "no-sixel", "timeout", "menu-hover", "menu-hover-sixel", "fullscreen"], default="sixel")
     parser.add_argument("--host-directory", type=Path,
                         help="Download checksum-pinned modern Microsoft ConPTY into this test directory")
     parser.add_argument("--startup-timeout", type=float, default=20,

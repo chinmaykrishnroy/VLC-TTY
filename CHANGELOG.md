@@ -2,6 +2,9 @@
 
 ## 0.0.1 (first public version, in development)
 
+- Avoid whole-screen clears when hovering between open menu headers, and synchronize required pixel/text transitions with the redraw.
+- Seek by 10 seconds with the wheel over the timeline; preserve volume control elsewhere and consume wheel input in open menus/dialogs.
+- Load legacy Windows-1252 and BOM-marked UTF-16 SRT/VTT sidecars alongside UTF-8, preserving accents and rejecting malformed declared Unicode and oversized files.
 - Preserve native widget detail in Sixel video under load: sample palette training rather than enlarging a low-resolution indexed image. Add stratified colour sampling, a bounded colour lookup cache, representable palette matching and light gradient dithering, with decoded-pixel regressions for fine and periodic strokes.
 - Request actual local Windows Terminal fullscreen from the player, confirm monitor geometry and restore only transitions owned by the app. Add `--fullscreen` startup and console resize/containment regressions, with a shortcut fallback for unsupported hosts and SSH.
 - Fit Sixel video to the widget's current pixel dimensions while adapting quantization detail to measured encoder/backend costs. Scale palette indices directly, retain the static artwork path, and include output work in the FPS interval.
